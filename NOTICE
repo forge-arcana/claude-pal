@@ -1,0 +1,12 @@
+Forge: Claude Pal
+=================
+
+THIRD-PARTY NOTICES
+
+This extension incorporates code from the following open-source projects:
+
+1. Claudemeter (MIT) — Copyright (c) 2026 HYPERI PTY LIMITED
+   https://github.com/hyperi-io/claudemeter
+
+2. Claude Notifier (GPL-3.0) — Copyright (c) 2025 Ashmit Bhardwaj
+   https://github.com/ashmitb95/claude-notifier

@@ -1,0 +1,9 @@
+src/**
+scripts/**
+.eslintrc*
+eslint.config.js
+esbuild.js
+node_modules/**
+!node_modules/puppeteer-core/**
+*.map
+.gitignore
