@@ -14,6 +14,7 @@
     "vscode": "^1.109.0"
   },
   "extensionKind": [
+    "workspace",
     "ui"
   ],
   "keywords": [
@@ -107,6 +108,11 @@
       {
         "command": "claudePal.toggleSound",
         "title": "Claude Pal: Toggle Sound Notifications"
+      },
+      {
+        "command": "claudePal.showMenu",
+        "title": "Claude Pal: Show Menu",
+        "category": "Claude Pal"
       }
     ],
     "configuration": {

@@ -215,20 +215,9 @@ function unregisterHooks() {
 // ── Signal file watcher ────────────────────────────────────────────
 
 function handleSignal() {
-  let content = "";
-  try {
-    content = fs.readFileSync(SIGNAL_FILE, "utf-8").trim();
-  } catch {
-    return;
-  }
-
-  const reason = content.split(" ")[0];
-
-  if (reason === "input") {
-    vscode.window.showInformationMessage("Claude needs your permission.");
-  } else if (reason === "done") {
-    vscode.window.showInformationMessage("Claude has finished the task.");
-  }
+  // Signal file is written by hook scripts to trigger sounds.
+  // No VS Code notification needed — permission prompts and task
+  // completion are already handled by VS Code's built-in UI.
 }
 
 // ── Public API ─────────────────────────────────────────────────────
@@ -296,9 +285,7 @@ function toggleSound() {
   } else {
     fs.writeFileSync(MUTE_FLAG, "");
   }
-  vscode.window.showInformationMessage(
-    `Claude Pal sound: ${soundEnabled ? "ON" : "OFF"}`
-  );
+  console.log(`Claude Pal sound: ${soundEnabled ? "ON" : "OFF"}`);
 }
 
 module.exports = {

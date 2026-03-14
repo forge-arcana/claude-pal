@@ -502,21 +502,8 @@ class ClaudeHttpFetcher {
                 debugChannel.appendLine('Browser opened - awaiting login');
             }
 
-            const loginTitle = cliEmail
-                ? `Log in to Claude.ai as ${cliEmail}...`
-                : 'Login required. Please log in to Claude.ai in the browser window...';
-
-            // Wait for login with progress notification
-            const loginResult = await vscode.window.withProgress(
-                {
-                    location: vscode.ProgressLocation.Notification,
-                    title: loginTitle,
-                    cancellable: false,
-                },
-                async () => {
-                    return await this._waitForSessionKey(page, browser);
-                }
-            );
+            fileLog(cliEmail ? `Waiting for login as ${cliEmail}...` : 'Waiting for browser login...');
+            const loginResult = await this._waitForSessionKey(page, browser);
 
             if (loginResult.success) {
                 // Extract and verify the sessionKey cookie before saving
@@ -539,22 +526,9 @@ class ClaudeHttpFetcher {
                     if (fs.existsSync(loginSessionDir)) {
                         fs.rmSync(loginSessionDir, { recursive: true, force: true });
                     }
-                    await vscode.window.showErrorMessage(
-                        `Wrong account. Browser is signed in as ${browserEmail} but Claude Code is using ${cliEmail}. Please log in with the correct account.`,
-                        { modal: false }
-                    );
                     // Navigate back to login page for another attempt
                     await page.goto(CLAUDE_URLS.LOGIN, { waitUntil: 'networkidle2', timeout: TIMEOUTS.PAGE_LOAD });
-                    const retryResult = await vscode.window.withProgress(
-                        {
-                            location: vscode.ProgressLocation.Notification,
-                            title: `Log in as ${cliEmail} in the browser window...`,
-                            cancellable: false,
-                        },
-                        async () => {
-                            return await this._waitForSessionKey(page, browser);
-                        }
-                    );
+                    const retryResult = await this._waitForSessionKey(page, browser);
                     if (!retryResult.success) {
                         throw new Error(retryResult.cancelled ? 'LOGIN_CANCELLED' : 'LOGIN_TIMEOUT');
                     }
@@ -581,15 +555,6 @@ class ClaudeHttpFetcher {
                     const creds = readCredentials();
                     this._saveCookie(sessionCookie.value, sessionCookie.expires, creds?.orgId);
                 }
-
-                vscode.window.withProgress(
-                    {
-                        location: vscode.ProgressLocation.Notification,
-                        title: 'Login successful! Session saved.',
-                        cancellable: false,
-                    },
-                    () => new Promise(resolve => setTimeout(resolve, 3000))
-                );
 
                 fileLog('Login successful, cookie saved');
                 if (debug) {

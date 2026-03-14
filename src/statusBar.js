@@ -7,7 +7,7 @@
 // Copyright: (c) 2026 forge
 
 const vscode = require('vscode');
-const { COMMANDS, CONFIG_NAMESPACE, calculateResetClockTime, calculateResetClockTimeExpanded, getCurrencySymbol, getUse24HourTime } = require('./utils');
+const { COMMANDS, CONFIG_NAMESPACE, calculateResetClockTime, calculateResetClockTimeExpanded, getCurrencySymbol, getUse24HourTime, formatModelName, capitalizeFirst } = require('./utils');
 const { fetchServiceStatus, getStatusDisplay, formatStatusTime, STATUS_PAGE_URL } = require('./serviceStatus');
 const { formatSubscriptionType, formatRateLimitTier } = require('./credentialsReader');
 
@@ -108,19 +108,31 @@ function getIconAndColor(percent, warningThreshold = 80, errorThreshold = 90) {
 
 /**
  * Get label text for the first status bar item.
- * Uses formatRateLimitTier() output (e.g., "Max 20x", "Pro") when credentials
- * are available, otherwise falls back to "Claude".
+ * Shows: "Claude - {Model} - Thinking ({Level})" when model info is available,
+ * otherwise falls back to "Claude".
  * Prepends a warning icon when service is degraded.
  * @param {object|null} credentialsInfo
+ * @param {object|null} modelInfo - { model, modelDisplay, hasThinking, effortLevel }
+ * @param {string|null} permissionMode - 'normal', 'yolo-safe', or 'yolo'
  * @returns {string}
  */
-function getLabelText(credentialsInfo) {
+function getLabelText(credentialsInfo, modelInfo, permissionMode) {
     let text = 'Claude';
-    if (credentialsInfo) {
-        const tier = formatRateLimitTier(credentialsInfo.rateLimitTier);
-        if (tier) {
-            text = tier;
+
+    if (modelInfo && modelInfo.modelDisplay) {
+        text = `Claude - ${modelInfo.modelDisplay}`;
+        if (modelInfo.hasThinking && modelInfo.effortLevel) {
+            text += ` - Thinking (${modelInfo.effortLevel})`;
+        } else if (modelInfo.hasThinking) {
+            text += ' - Thinking';
         }
+    }
+
+    // YOLO badge
+    if (permissionMode === 'yolo') {
+        text += ' $(zap)';
+    } else if (permissionMode === 'yolo-safe') {
+        text += ' $(shield)';
     }
 
     if (isServiceStatusEnabled() && currentServiceStatus && currentServiceStatus.indicator !== 'none') {
@@ -224,23 +236,23 @@ function createStatusBarItem(context) {
     const basePriority = getStatusBarPriority();
 
     statusBarItems.label = vscode.window.createStatusBarItem(alignment, basePriority);
-    statusBarItems.label.command = COMMANDS.FETCH_NOW;
+    statusBarItems.label.command = COMMANDS.SHOW_MENU;
     statusBarItems.label.text = 'Claude  ';
     statusBarItems.label.show();
     context.subscriptions.push(statusBarItems.label);
 
     statusBarItems.session = vscode.window.createStatusBarItem(alignment, basePriority - 1);
-    statusBarItems.session.command = COMMANDS.FETCH_NOW;
+    statusBarItems.session.command = COMMANDS.SHOW_MENU;
     context.subscriptions.push(statusBarItems.session);
 
     statusBarItems.weekly = vscode.window.createStatusBarItem(alignment, basePriority - 2);
-    statusBarItems.weekly.command = COMMANDS.FETCH_NOW;
+    statusBarItems.weekly.command = COMMANDS.SHOW_MENU;
     context.subscriptions.push(statusBarItems.weekly);
 
     return statusBarItems.label;
 }
 
-function updateStatusBar(item, usageData, activityStats = null, sessionData = null, credentialsInfo = null) {
+function updateStatusBar(item, usageData, activityStats = null, sessionData = null, credentialsInfo = null, modelInfo = null, permissionMode = null) {
     const config = vscode.workspace.getConfiguration(CONFIG_NAMESPACE);
 
     const globalWarning = config.get('thresholds.warning', 80);
@@ -262,7 +274,7 @@ function updateStatusBar(item, usageData, activityStats = null, sessionData = nu
     if (!usageData) {
         if (!isSpinnerActive) {
             if (statusBarItems.label) {
-                statusBarItems.label.text = `${getLabelText(credentialsInfo)}  `;
+                statusBarItems.label.text = `${getLabelText(credentialsInfo, modelInfo, permissionMode)}  `;
                 statusBarItems.label.color = getServiceStatusColor();
             }
             setAllTooltips('Click to fetch Claude usage data');
@@ -274,7 +286,7 @@ function updateStatusBar(item, usageData, activityStats = null, sessionData = nu
 
     // --- Update label ---
     if (!isSpinnerActive && statusBarItems.label) {
-        statusBarItems.label.text = `${getLabelText(credentialsInfo)}  `;
+        statusBarItems.label.text = `${getLabelText(credentialsInfo, modelInfo, permissionMode)}  `;
         statusBarItems.label.color = getServiceStatusColor();
     }
 

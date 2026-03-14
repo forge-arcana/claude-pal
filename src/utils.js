@@ -30,6 +30,7 @@ const COMMANDS = {
     OPEN_BROWSER: 'claudePal.openBrowser',
     RESYNC_ACCOUNT: 'claudePal.resyncAccount',
     TOGGLE_SOUND: 'claudePal.toggleSound',
+    SHOW_MENU: 'claudePal.showMenu',
 };
 
 // Cross-platform config directory following OS conventions
@@ -362,6 +363,34 @@ function getCurrencySymbol(currency) {
     return symbols[currency] || '';
 }
 
+// Format model ID to display name
+// "claude-opus-4-6-20250901" → "Opus 4.6"
+// "claude-sonnet-4-5-20250514" → "Sonnet 4.5"
+// "claude-haiku-4-5-20251001" → "Haiku 4.5"
+// "claude-3-5-sonnet-20241022" → "Sonnet 3.5" (old format)
+function formatModelName(modelId) {
+    if (!modelId) return null;
+    // New format: claude-{family}-{major}-{minor}[-{date}]
+    let match = modelId.match(/^claude-([a-z]+)-(\d+)-(\d+)/);
+    if (match) {
+        const name = match[1].charAt(0).toUpperCase() + match[1].slice(1);
+        return `${name} ${match[2]}.${match[3]}`;
+    }
+    // Old format: claude-{major}-{minor}-{family}[-{date}]
+    match = modelId.match(/^claude-(\d+)-(\d+)-([a-z]+)/);
+    if (match) {
+        const name = match[3].charAt(0).toUpperCase() + match[3].slice(1);
+        return `${name} ${match[1]}.${match[2]}`;
+    }
+    return modelId;
+}
+
+// Capitalize first letter
+function capitalizeFirst(str) {
+    if (!str) return null;
+    return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
+}
+
 function formatCompact(value) {
     if (value >= 1000000) {
         return `${(value / 1000000).toFixed(1)}M`;
@@ -393,6 +422,8 @@ module.exports = {
     formatCountdown,
     getCurrencySymbol,
     formatCompact,
+    formatModelName,
+    capitalizeFirst,
     initFileLogger,
     getFileLogger,
     fileLog,

@@ -13,6 +13,7 @@
 const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { ClaudeHttpFetcher } = require('./src/httpFetcher');
 
 // Legacy scraper is lazy-loaded only when useLegacyScraper is enabled.
@@ -31,7 +32,9 @@ function getLegacyBrowserState() {
 const { createStatusBarItem, updateStatusBar, startSpinner, stopSpinner, refreshServiceStatus } = require('./src/statusBar');
 const { ActivityMonitor } = require('./src/activityMonitor');
 const { setupNotifier, teardownNotifier, toggleSound } = require('./src/notifier');
-const { CONFIG_NAMESPACE, COMMANDS, PATHS, setDevMode, isDebugEnabled, getDebugChannel, disposeDebugChannel, initFileLogger, fileLog, getDefaultDebugLogPath } = require('./src/utils');
+const { CONFIG_NAMESPACE, COMMANDS, PATHS, setDevMode, isDebugEnabled, getDebugChannel, disposeDebugChannel, initFileLogger, fileLog, getDefaultDebugLogPath, formatModelName, capitalizeFirst } = require('./src/utils');
+const { ClaudeDataLoader } = require('./src/claudeDataLoader');
+const { MODES, getCurrentMode, setMode, getModeDisplay } = require('./src/permissionsManager');
 const { CREDENTIALS_PATH, readCredentials, formatSubscriptionType, formatRateLimitTier } = require('./src/credentialsReader');
 
 let statusBarItem;
@@ -44,6 +47,8 @@ let serviceStatusTimer;
 let activityMonitor;
 let credentialsWatcher;
 let currentWorkspacePath = null;
+let claudeDataLoader = null;
+let currentModelInfo = null;
 
 // Prevents auto-retry after user closes login browser
 let loginWasCancelled = false;
@@ -219,9 +224,40 @@ async function fetchUsageLegacy(isManualRetry = false) {
     }
 }
 
+// Read effortLevel from ~/.claude/settings.json
+function readEffortLevel() {
+    try {
+        const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+        if (fs.existsSync(settingsPath)) {
+            const data = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+            return data.effortLevel ? capitalizeFirst(data.effortLevel) : null;
+        }
+    } catch { /* ignore */ }
+    return null;
+}
+
+async function refreshModelInfo() {
+    if (!claudeDataLoader) return;
+    try {
+        const raw = await claudeDataLoader.getCurrentModelInfo();
+        if (raw && raw.model) {
+            currentModelInfo = {
+                model: raw.model,
+                modelDisplay: formatModelName(raw.model),
+                hasThinking: raw.hasThinking,
+                effortLevel: readEffortLevel(),
+            };
+        }
+    } catch (error) {
+        fileLog(`refreshModelInfo error: ${error.message}`);
+    }
+}
+
 async function updateStatusBarWithAllData() {
+    await refreshModelInfo();
     const activityStats = activityMonitor ? activityMonitor.getStats(usageData, null) : null;
-    updateStatusBar(statusBarItem, usageData, activityStats, null, credentialsInfo);
+    const permissionMode = getCurrentMode();
+    updateStatusBar(statusBarItem, usageData, activityStats, null, credentialsInfo, currentModelInfo, permissionMode);
 }
 
 function createAutoRefreshTimer(minutes) {
@@ -290,17 +326,10 @@ function setupCredentialsMonitoring(context) {
                 }
                 loginWasCancelled = false;
 
-                // Prompt user to log in for the new account
-                const action = await vscode.window.showInformationMessage(
-                    'Claude Pal: Account switched. Log in to refresh usage data.',
-                    'Log In Again',
-                    'Later'
-                );
-                if (action === 'Log In Again') {
-                    performFetch(true).catch(err => {
-                        fileLog(`Post-switch fetch failed: ${err.message}`);
-                    });
-                }
+                // Auto-fetch for the new account
+                performFetch(true).catch(err => {
+                    fileLog(`Post-switch fetch failed: ${err.message}`);
+                });
             } else {
                 await updateStatusBarWithAllData();
             }
@@ -388,6 +417,7 @@ async function activate(context) {
 
     currentWorkspacePath = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath || null;
     initFileLogger(currentWorkspacePath);
+    claudeDataLoader = new ClaudeDataLoader(currentWorkspacePath, fileLog);
 
     if (currentWorkspacePath) {
         fileLog(`Extension activated for workspace: ${currentWorkspacePath}`);
@@ -417,10 +447,55 @@ async function activate(context) {
 
     // Register commands
     context.subscriptions.push(
+        vscode.commands.registerCommand(COMMANDS.SHOW_MENU, async () => {
+            const currentMode = getCurrentMode();
+            const modeLabel = currentMode === MODES.YOLO ? '$(zap) YOLO'
+                : currentMode === MODES.YOLO_SAFE ? '$(shield) YOLO Safe'
+                : '$(lock) Normal';
+
+            const items = [
+                { label: '', kind: vscode.QuickPickItemKind.Separator },
+                { label: `Permissions: ${modeLabel}`, kind: vscode.QuickPickItemKind.Separator },
+                {
+                    label: currentMode === MODES.YOLO ? '$(check) YOLO — Approve All' : '$(zap) YOLO — Approve All',
+                    description: currentMode === MODES.YOLO ? '(active)' : '',
+                    action: 'yolo',
+                },
+                {
+                    label: currentMode === MODES.YOLO_SAFE ? '$(check) YOLO Safe — Non-destructive Only' : '$(shield) YOLO Safe — Non-destructive Only',
+                    description: currentMode === MODES.YOLO_SAFE ? '(active)' : '',
+                    action: 'yolo-safe',
+                },
+                {
+                    label: currentMode === MODES.NORMAL ? '$(check) Normal — Ask for Permission' : '$(lock) Normal — Ask for Permission',
+                    description: currentMode === MODES.NORMAL ? '(active)' : '',
+                    action: 'normal',
+                },
+                { label: '', kind: vscode.QuickPickItemKind.Separator },
+                { label: '$(sync) Fetch Usage Now', command: COMMANDS.FETCH_NOW },
+                { label: '$(account) Resync Account', command: COMMANDS.RESYNC_ACCOUNT },
+                { label: '$(globe) Open Claude.ai Settings', command: COMMANDS.OPEN_SETTINGS },
+                { label: '$(browser) Login to Claude.ai', command: COMMANDS.OPEN_BROWSER },
+                { label: '$(unmute) Toggle Sound', command: COMMANDS.TOGGLE_SOUND },
+                { label: '$(trash) Clear Session', command: COMMANDS.CLEAR_SESSION },
+                { label: '$(output) Show Debug Output', command: COMMANDS.SHOW_DEBUG },
+            ];
+            const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Claude Pal' });
+            if (!picked) return;
+            if (picked.action) {
+                setMode(picked.action);
+                await updateStatusBarWithAllData();
+            } else if (picked.command) {
+                vscode.commands.executeCommand(picked.command);
+            }
+        })
+    );
+
+    context.subscriptions.push(
         vscode.commands.registerCommand(COMMANDS.FETCH_NOW, async () => {
-            const { webError, loginCancelled } = await performFetch(true);
-            if (webError && !loginCancelled) {
-                vscode.window.showErrorMessage(`Failed to fetch Claude usage: ${webError.message}`);
+            const { webError } = await performFetch(true);
+            if (webError) {
+                fileLog(`Fetch failed: ${webError.message}`);
             }
         })
     );
@@ -433,7 +508,7 @@ async function activate(context) {
 
     context.subscriptions.push(
         vscode.commands.registerCommand(COMMANDS.START_SESSION, async () => {
-            vscode.window.showInformationMessage('Session tracking has been removed. Token usage is now monitored via hooks.');
+            fileLog('Start session command is deprecated');
         })
     );
 
@@ -485,18 +560,16 @@ async function activate(context) {
     context.subscriptions.push(
         vscode.commands.registerCommand(COMMANDS.RESET_CONNECTION, async () => {
             if (!isLegacyMode()) {
-                vscode.window.showInformationMessage('Reset Connection is only available in legacy scraper mode. Use "Clear Session" instead.');
+                fileLog('Reset Connection is only available in legacy scraper mode');
                 return;
             }
             try {
                 if (scraper) {
                     const result = await scraper.reset();
-                    vscode.window.showInformationMessage(result.message);
-                } else {
-                    vscode.window.showWarningMessage('Scraper not initialised');
+                    fileLog(`Reset: ${result.message}`);
                 }
             } catch (error) {
-                vscode.window.showErrorMessage(`Reset failed: ${error.message}`);
+                fileLog(`Reset failed: ${error.message}`);
             }
         })
     );
@@ -504,34 +577,23 @@ async function activate(context) {
     context.subscriptions.push(
         vscode.commands.registerCommand(COMMANDS.CLEAR_SESSION, async () => {
             try {
-                const confirm = await vscode.window.showWarningMessage(
-                    'This will delete your saved session. You will need to log in to Claude.ai again. Continue?',
-                    { modal: true },
-                    'Yes, Clear Session'
-                );
-                if (confirm === 'Yes, Clear Session') {
-                    if (isLegacyMode()) {
-                        if (!scraper) scraper = new (getScraperModule().ClaudeUsageScraper)();
-                        const result = await scraper.clearSession();
-                        vscode.window.showInformationMessage(result.message);
-                    } else {
-                        if (!httpFetcher) httpFetcher = new ClaudeHttpFetcher();
-                        const result = httpFetcher.clearSession();
-                        vscode.window.showInformationMessage(result.message);
-                    }
-                    loginWasCancelled = false;
+                if (isLegacyMode()) {
+                    if (!scraper) scraper = new (getScraperModule().ClaudeUsageScraper)();
+                    scraper.clearSession();
+                } else {
+                    if (!httpFetcher) httpFetcher = new ClaudeHttpFetcher();
+                    httpFetcher.clearSession();
                 }
+                loginWasCancelled = false;
+                fileLog('Session cleared');
             } catch (error) {
-                vscode.window.showErrorMessage(`Clear session failed: ${error.message}`);
+                fileLog(`Clear session failed: ${error.message}`);
             }
         })
     );
 
     context.subscriptions.push(
         vscode.commands.registerCommand(COMMANDS.RESYNC_ACCOUNT, async () => {
-            // Clears the saved session and triggers a fresh browser login.
-            // Use this after running /login in the Claude Code CLI when the
-            // automatic account-switch detection didn't fire (e.g. personal -> personal).
             try {
                 if (!httpFetcher) httpFetcher = new ClaudeHttpFetcher();
                 httpFetcher.clearSession({ clearLoginBrowserCache: true });
@@ -539,10 +601,10 @@ async function activate(context) {
                 fileLog('Resync Account: session cleared, starting login flow');
                 const { webError } = await performFetch(true);
                 if (webError) {
-                    vscode.window.showErrorMessage(`Login failed: ${webError.message}`);
+                    fileLog(`Resync login failed: ${webError.message}`);
                 }
             } catch (error) {
-                vscode.window.showErrorMessage(`Resync failed: ${error.message}`);
+                fileLog(`Resync failed: ${error.message}`);
             }
         })
     );
@@ -550,31 +612,16 @@ async function activate(context) {
     context.subscriptions.push(
         vscode.commands.registerCommand(COMMANDS.OPEN_BROWSER, async () => {
             try {
-                vscode.window.showInformationMessage('Opening browser for Claude.ai login...');
                 if (isLegacyMode()) {
                     if (!scraper) scraper = new (getScraperModule().ClaudeUsageScraper)();
-                    const result = await scraper.forceOpenBrowser();
-                    if (result.success) {
-                        vscode.window.showInformationMessage(result.message);
-                    } else {
-                        vscode.window.showErrorMessage(result.message);
-                    }
+                    await scraper.forceOpenBrowser();
                 } else {
                     if (!httpFetcher) httpFetcher = new ClaudeHttpFetcher();
                     await httpFetcher.login();
-                    const { webError } = await performFetch(true);
-                    if (webError) {
-                        vscode.window.showErrorMessage(`Fetch failed after login: ${webError.message}`);
-                    }
+                    await performFetch(true);
                 }
             } catch (error) {
-                if (error.message === 'LOGIN_CANCELLED') {
-                    vscode.window.showInformationMessage('Login cancelled.');
-                } else if (error.message === 'CHROME_NOT_FOUND') {
-                    vscode.window.showErrorMessage('Chromium-based browser required. Install Chrome, Chromium, Brave, or Edge.');
-                } else {
-                    vscode.window.showErrorMessage(`Failed to open browser: ${error.message}`);
-                }
+                fileLog(`Open browser failed: ${error.message}`);
             }
         })
     );
@@ -597,17 +644,9 @@ async function activate(context) {
                 : (fetcher && fetcher.hasExistingSession());
 
             if (!hasSession && !isLegacyMode()) {
-                // First v2 run -- no session cookie. Prompt user to log in.
+                // No session cookie -- skip silently. User can click status bar to login.
                 httpFetcher = fetcher;
-                fileLog('No session cookie found on startup -- prompting user to log in');
-                const action = await vscode.window.showInformationMessage(
-                    'Claude Pal: Log in to Claude.ai to see your usage limits.',
-                    'Log In Now',
-                    'Later'
-                );
-                if (action === 'Log In Now') {
-                    await performFetch(true);
-                }
+                fileLog('No session cookie found on startup -- skipping (click status bar to login)');
                 return;
             }
 

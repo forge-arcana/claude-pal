@@ -432,6 +432,66 @@ class ClaudeDataLoader {
         }
     }
 
+    // Get the current model and thinking state from the most recent main session
+    async getCurrentModelInfo() {
+        const sessionStart = Date.now() - TIMEOUTS.SESSION_DURATION;
+
+        let dataDir;
+        if (this.projectDirName) {
+            dataDir = await this.getProjectDataDirectory();
+            if (!dataDir) return null;
+        } else {
+            dataDir = await this.findClaudeDataDirectory();
+        }
+        if (!dataDir) return null;
+
+        try {
+            const allFiles = await this.findJsonlFiles(dataDir);
+            const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/i;
+            const mainFiles = allFiles.filter(f => {
+                const name = path.basename(f);
+                return !name.startsWith('agent-') && uuidPattern.test(name);
+            });
+
+            // Find most recently modified file within session window
+            let newest = null;
+            let newestMtime = 0;
+            for (const f of mainFiles) {
+                try {
+                    const s = await fs.stat(f);
+                    if (s.mtimeMs > newestMtime && s.mtimeMs >= sessionStart) {
+                        newest = f;
+                        newestMtime = s.mtimeMs;
+                    }
+                } catch { continue; }
+            }
+
+            if (!newest) return null;
+
+            const content = await fs.readFile(newest, 'utf-8');
+            const lines = splitLines(content.trim());
+
+            // Scan from end for the most recent assistant message with a model
+            for (let i = lines.length - 1; i >= 0; i--) {
+                try {
+                    const entry = JSON.parse(lines[i]);
+                    if (entry.type === 'assistant' && entry.message?.model) {
+                        const hasThinking = Array.isArray(entry.message.content) &&
+                            entry.message.content.some(b => b.type === 'thinking');
+                        return {
+                            model: entry.message.model,
+                            hasThinking,
+                        };
+                    }
+                } catch { continue; }
+            }
+        } catch (error) {
+            this.log(`getCurrentModelInfo error: ${error.message}`);
+        }
+
+        return null;
+    }
+
     async getTodayUsage() {
         const startOfDay = new Date();
         startOfDay.setHours(0, 0, 0, 0);
