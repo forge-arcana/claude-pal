@@ -148,7 +148,5 @@ module.exports = {
     fetchServiceStatus,
     getStatusDisplay,
     formatStatusTime,
-    clearStatusCache,
     STATUS_PAGE_URL,
-    STATUS_INDICATORS
 };

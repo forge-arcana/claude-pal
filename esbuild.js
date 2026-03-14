@@ -13,7 +13,7 @@ async function main() {
         sourcesContent: false,
         platform: 'node',
         outdir: 'dist',
-        external: ['vscode', 'typescript', 'puppeteer-core'],
+        external: ['vscode', 'typescript'],
         logLevel: 'info',
         plugins: [
             {

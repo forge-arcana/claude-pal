@@ -1,38 +1,10 @@
-// Project:   Claude Pal v2 (Streamlined)
-// File:      httpFetcher.js
-// Purpose:   HTTP-based Claude.ai usage data fetching (replaces browser automation)
-// Language:  JavaScript (CommonJS)
-//
-// v2 default fetch engine. Uses native fetch() with a stored sessionKey cookie
-// and browser-like headers to call Claude.ai API endpoints directly. A browser
-// (via puppeteer-core) is only launched once for the initial login to obtain
-// the cookie. Subsequent fetches complete in 1-3 seconds with no browser.
-//
-// Why puppeteer-core is retained (not removed entirely):
-//
-// 1. LOGIN FLOW: Claude.ai's login involves OAuth redirects, CAPTCHAs, and
-//    Cloudflare challenges that cannot be replicated with plain HTTP requests.
-//    A real browser is required to obtain the sessionKey cookie. puppeteer-core
-//    (~2MB) drives the user's existing system browser for this — no bundled
-//    Chromium needed (unlike puppeteer which ships ~200MB of Chromium).
-//
-// 2. UNDOCUMENTED API RISK: The three endpoints we fetch (/usage, /prepaid/credits,
-//    /overage_spend_limit) are internal Claude.ai APIs with no public documentation
-//    or stability guarantees. Anthropic could change, gate, or remove them at any
-//    time. The legacy browser scraper (src/scraper.js) is retained as an opt-in
-//    fallback that can adapt to page-level changes even if the API contract breaks.
-//
-// 3. MINIMAL COST: puppeteer-core adds ~2MB to the extension (vs ~200MB for full
-//    puppeteer). It is lazy-loaded only when login() is called, so it has zero
-//    runtime cost during normal HTTP fetch cycles.
-//
-// License:   MIT
-// Copyright: (c) 2026 forge
+// HTTP-based Claude.ai usage data fetching.
+// Uses native fetch() with a stored sessionKey cookie to call Claude.ai API
+// endpoints directly. Login is handled by opening claude.ai in the user's
+// browser and having them paste their sessionKey cookie.
 
 const path = require('path');
-const os = require('os');
 const fs = require('fs');
-const { execSync } = require('child_process');
 const vscode = require('vscode');
 
 const {
@@ -45,11 +17,9 @@ const {
 
 const {
     PATHS,
-    TIMEOUTS,
     CLAUDE_URLS,
     isDebugEnabled,
     getDebugChannel,
-    sleep,
     fileLog,
 } = require('./utils');
 
@@ -70,39 +40,7 @@ const BROWSER_HEADERS = {
     'Origin': 'https://claude.ai',
 };
 
-// Chromium-based browser paths by platform (for login flow)
-const CHROMIUM_BROWSERS = {
-    linux: {
-        'google-chrome.desktop': ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/snap/bin/google-chrome'],
-        'chromium-browser.desktop': ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/snap/bin/chromium'],
-        'chromium.desktop': ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/snap/bin/chromium'],
-        'brave-browser.desktop': ['/usr/bin/brave-browser', '/usr/bin/brave', '/snap/bin/brave', '/opt/brave.com/brave/brave-browser'],
-        'microsoft-edge.desktop': ['/usr/bin/microsoft-edge', '/usr/bin/microsoft-edge-stable'],
-        'vivaldi-stable.desktop': ['/usr/bin/vivaldi-stable', '/usr/bin/vivaldi'],
-        'opera.desktop': ['/usr/bin/opera'],
-    },
-    darwin: {
-        'com.google.chrome': '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-        'org.chromium.chromium': '/Applications/Chromium.app/Contents/MacOS/Chromium',
-        'com.brave.browser': '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
-        'com.microsoft.edgemac': '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-        'company.thebrowser.browser': '/Applications/Arc.app/Contents/MacOS/Arc',
-        'com.vivaldi.vivaldi': '/Applications/Vivaldi.app/Contents/MacOS/Vivaldi',
-        'com.operasoftware.opera': '/Applications/Opera.app/Contents/MacOS/Opera',
-    },
-    win32: {
-        'chrome': 'Google\\Chrome\\Application\\chrome.exe',
-        'chromium': 'Chromium\\Application\\chrome.exe',
-        'brave': 'BraveSoftware\\Brave-Browser\\Application\\brave.exe',
-        'msedge': 'Microsoft\\Edge\\Application\\msedge.exe',
-        'vivaldi': 'Vivaldi\\Application\\vivaldi.exe',
-        'opera': 'Opera\\launcher.exe',
-    }
-};
 
-// Login lock: simple file-based mutex to prevent multiple login windows
-const LOGIN_LOCK_FILE = path.join(PATHS.CONFIG_DIR, 'login-in-progress.lock');
-const LOGIN_LOCK_TTL = 5 * 60 * 1000; // 5 minutes
 
 class ClaudeHttpFetcher {
     constructor() {
@@ -151,27 +89,11 @@ class ClaudeHttpFetcher {
         return true;
     }
 
-    clearSession({ clearLoginBrowserCache = false } = {}) {
+    clearSession() {
         try {
             if (fs.existsSync(PATHS.SESSION_COOKIE_FILE)) {
                 fs.unlinkSync(PATHS.SESSION_COOKIE_FILE);
                 fileLog('Session cookie deleted');
-            }
-            // Also clean up old browser-session dir if it exists (v1 migration)
-            const oldSessionDir = path.join(PATHS.CONFIG_DIR, 'browser-session');
-            if (fs.existsSync(oldSessionDir)) {
-                fs.rmSync(oldSessionDir, { recursive: true, force: true });
-                fileLog('Cleaned up old browser-session directory');
-            }
-            // On account switch, clear the login browser's cached session so the
-            // browser opens fresh for the new account instead of auto-logging in
-            // as the previous account.
-            if (clearLoginBrowserCache) {
-                const loginSessionDir = path.join(PATHS.CONFIG_DIR, 'login-session');
-                if (fs.existsSync(loginSessionDir)) {
-                    fs.rmSync(loginSessionDir, { recursive: true, force: true });
-                    fileLog('Cleared login browser cache for account switch');
-                }
             }
             this._cachedOrgId = null;
             return { success: true, message: 'Session cleared. Next fetch will prompt for login.' };
@@ -391,256 +313,41 @@ class ClaudeHttpFetcher {
         }
     }
 
-    // --- Login Flow (puppeteer-core, lazy loaded) ---
-
-    _isLoginInProgress() {
-        try {
-            if (!fs.existsSync(LOGIN_LOCK_FILE)) return false;
-            const data = JSON.parse(fs.readFileSync(LOGIN_LOCK_FILE, 'utf-8'));
-            if (Date.now() - data.timestamp < LOGIN_LOCK_TTL) {
-                return true;
-            }
-            // Stale lock, remove it
-            fs.unlinkSync(LOGIN_LOCK_FILE);
-            return false;
-        } catch {
-            return false;
-        }
-    }
-
-    _acquireLoginLock() {
-        if (this._isLoginInProgress()) {
-            throw new Error('LOGIN_IN_PROGRESS');
-        }
-        const dir = path.dirname(LOGIN_LOCK_FILE);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-        }
-        fs.writeFileSync(LOGIN_LOCK_FILE, JSON.stringify({ timestamp: Date.now(), pid: process.pid }));
-    }
-
-    _releaseLoginLock() {
-        try {
-            if (fs.existsSync(LOGIN_LOCK_FILE)) {
-                fs.unlinkSync(LOGIN_LOCK_FILE);
-            }
-        } catch {
-            // Ignore
-        }
-    }
+    // --- Login Flow (browser cookie paste) ---
 
     async login() {
-        const debug = isDebugEnabled();
-        const debugChannel = getDebugChannel();
-
-        if (this._isLoginInProgress()) {
-            fileLog('Another instance is logging in, skipping');
-            throw new Error('LOGIN_IN_PROGRESS');
-        }
-
-        this._acquireLoginLock();
         fileLog('Login flow started');
 
-        // Get CLI account email upfront so we can verify the user logs into the correct account.
-        const cliEmail = await this._fetchBootstrapWithCliToken();
-        if (cliEmail) {
-            fileLog(`CLI account email: ${cliEmail} — will verify after login`);
-        } else {
-            fileLog('CLI token auth unavailable — account verification skipped');
-        }
+        // Open claude.ai in the user's default browser
+        const loginUrl = vscode.Uri.parse(CLAUDE_URLS.LOGIN);
+        await vscode.env.openExternal(loginUrl);
 
-        let browser = null;
-        let page = null;
-
-        try {
-            // Lazy-load puppeteer-core
-            const puppeteer = require('puppeteer-core');
-
-            const chromePath = findChrome();
-            if (!chromePath) {
-                throw new Error('CHROME_NOT_FOUND');
-            }
-
-            if (debug) {
-                debugChannel.appendLine(`\n=== LOGIN FLOW (${new Date().toLocaleString()}) ===`);
-                debugChannel.appendLine(`Browser: ${chromePath}`);
-            }
-
-            const port = await this._findAvailablePort();
-            const userDataDir = path.join(PATHS.CONFIG_DIR, 'login-session');
-
-            browser = await puppeteer.launch({
-                headless: false,
-                userDataDir,
-                executablePath: chromePath,
-                timeout: 60000,
-                args: [
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-blink-features=AutomationControlled',
-                    '--disable-session-crashed-bubble',
-                    '--disable-infobars',
-                    '--noerrdialogs',
-                    '--hide-crash-restore-bubble',
-                    '--no-first-run',
-                    '--no-default-browser-check',
-                    `--remote-debugging-port=${port}`
-                ],
-                defaultViewport: { width: 1280, height: 800 },
-            });
-
-            page = await browser.newPage();
-            await page.setUserAgent(BROWSER_HEADERS['User-Agent']);
-
-            await page.goto(CLAUDE_URLS.LOGIN, {
-                waitUntil: 'networkidle2',
-                timeout: TIMEOUTS.PAGE_LOAD,
-            });
-
-            if (debug) {
-                debugChannel.appendLine('Browser opened - awaiting login');
-            }
-
-            fileLog(cliEmail ? `Waiting for login as ${cliEmail}...` : 'Waiting for browser login...');
-            const loginResult = await this._waitForSessionKey(page, browser);
-
-            if (loginResult.success) {
-                // Extract and verify the sessionKey cookie before saving
-                const cookies = await page.cookies(CLAUDE_URLS.BASE);
-                const sessionCookie = cookies.find(c => c.name === 'sessionKey');
-
-                if (!sessionCookie) {
-                    throw new Error('Login appeared successful but no sessionKey cookie found');
-                }
-
-                // Verify the logged-in account matches the CLI account
-                fileLog('Verifying browser account matches CLI account...');
-                const bootstrapData = await this._fetchBootstrapWithKey(sessionCookie.value);
-                const browserEmail = bootstrapData?.account?.email_address || null;
-
-                if (cliEmail && browserEmail && cliEmail.toLowerCase() !== browserEmail.toLowerCase()) {
-                    // Wrong account — clear browser cache and force re-login
-                    fileLog(`Account mismatch: browser=${browserEmail}, CLI=${cliEmail}`);
-                    const loginSessionDir = path.join(PATHS.CONFIG_DIR, 'login-session');
-                    if (fs.existsSync(loginSessionDir)) {
-                        fs.rmSync(loginSessionDir, { recursive: true, force: true });
-                    }
-                    // Navigate back to login page for another attempt
-                    await page.goto(CLAUDE_URLS.LOGIN, { waitUntil: 'networkidle2', timeout: TIMEOUTS.PAGE_LOAD });
-                    const retryResult = await this._waitForSessionKey(page, browser);
-                    if (!retryResult.success) {
-                        throw new Error(retryResult.cancelled ? 'LOGIN_CANCELLED' : 'LOGIN_TIMEOUT');
-                    }
-                    const retryCookies = await page.cookies(CLAUDE_URLS.BASE);
-                    const retrySessionCookie = retryCookies.find(c => c.name === 'sessionKey');
-                    if (!retrySessionCookie) {
-                        throw new Error('No sessionKey cookie after retry');
-                    }
-                    // Re-verify after retry
-                    const retryBootstrap = await this._fetchBootstrapWithKey(retrySessionCookie.value);
-                    const retryBrowserEmail = retryBootstrap?.account?.email_address || null;
-                    if (cliEmail && retryBrowserEmail && cliEmail.toLowerCase() !== retryBrowserEmail.toLowerCase()) {
-                        fileLog(`Account mismatch on retry: browser=${retryBrowserEmail}, CLI=${cliEmail}`);
-                        throw new Error('WRONG_ACCOUNT');
-                    }
-                    const creds = readCredentials();
-                    this._saveCookie(retrySessionCookie.value, retrySessionCookie.expires, creds?.orgId);
-                } else {
-                    if (!cliEmail) {
-                        fileLog('CLI token auth not supported for verification — skipping account check');
-                    } else {
-                        fileLog(`Account verified: ${browserEmail}`);
-                    }
-                    const creds = readCredentials();
-                    this._saveCookie(sessionCookie.value, sessionCookie.expires, creds?.orgId);
-                }
-
-                fileLog('Login successful, cookie saved');
-                if (debug) {
-                    debugChannel.appendLine('Login successful - sessionKey cookie extracted and saved');
-                }
-            } else if (loginResult.cancelled) {
-                fileLog('Login cancelled by user');
-                throw new Error('LOGIN_CANCELLED');
-            } else {
-                fileLog('Login timed out');
-                throw new Error('LOGIN_TIMEOUT');
-            }
-        } finally {
-            // Close the login browser
-            if (browser) {
-                try {
-                    const browserProcess = browser.process();
-                    const closePromise = browser.close();
-                    const timeoutPromise = new Promise((_, reject) =>
-                        setTimeout(() => reject(new Error('timeout')), 5000)
-                    );
-                    try {
-                        await Promise.race([closePromise, timeoutPromise]);
-                    } catch {
-                        if (browserProcess) {
-                            try { browserProcess.kill('SIGKILL'); } catch { /* ignore */ }
-                        }
-                        await sleep(1000);
-                    }
-                } catch {
-                    // Ignore close errors
-                }
-            }
-            this._releaseLoginLock();
-        }
-    }
-
-    async _waitForSessionKey(page, browser, maxWaitMs = TIMEOUTS.LOGIN_WAIT, pollIntervalMs = TIMEOUTS.LOGIN_POLL) {
-        const debug = isDebugEnabled();
-        const startTime = Date.now();
-
-        while (Date.now() - startTime < maxWaitMs) {
-            await sleep(pollIntervalMs);
-
-            try {
-                if (!browser || !browser.isConnected()) {
-                    if (debug) {
-                        getDebugChannel().appendLine('Auth: Browser disconnected - login cancelled');
-                    }
-                    return { success: false, cancelled: true };
-                }
-
-                const cookies = await page.cookies(CLAUDE_URLS.BASE);
-                const hasSessionKey = cookies.some(c => c.name === 'sessionKey');
-
-                if (hasSessionKey) {
-                    if (debug) {
-                        getDebugChannel().appendLine('Auth: sessionKey cookie detected');
-                    }
-                    return { success: true, cancelled: false };
-                }
-            } catch (error) {
-                if (error.message.includes('Target closed') ||
-                    error.message.includes('Protocol error') ||
-                    error.message.includes('Session closed') ||
-                    error.message.includes('Connection closed')) {
-                    return { success: false, cancelled: true };
-                }
-                console.log('Cookie check error:', error.message);
-            }
-        }
-
-        return { success: false, cancelled: false };
-    }
-
-    async _findAvailablePort() {
-        const net = require('net');
-        return new Promise((resolve, reject) => {
-            const server = net.createServer();
-            server.unref();
-            server.on('error', reject);
-            server.listen(0, () => {
-                const port = server.address().port;
-                server.close(() => resolve(port));
-            });
+        // Ask user to paste their sessionKey cookie
+        const sessionKey = await vscode.window.showInputBox({
+            title: 'Claude Pal — Paste Session Cookie',
+            prompt: 'Log in to claude.ai, then copy your sessionKey cookie from DevTools (F12 → Application → Cookies → claude.ai → sessionKey)',
+            placeHolder: 'sk-ant-...',
+            ignoreFocusOut: true,
+            password: true,
         });
+
+        if (!sessionKey) {
+            fileLog('Login cancelled by user');
+            throw new Error('LOGIN_CANCELLED');
+        }
+
+        // Validate the cookie by fetching bootstrap
+        fileLog('Validating session cookie...');
+        const bootstrapData = await this._fetchBootstrapWithKey(sessionKey.trim());
+        if (!bootstrapData || !bootstrapData.account) {
+            throw new Error('Invalid session cookie — could not authenticate');
+        }
+
+        const email = bootstrapData.account.email_address;
+        fileLog(`Login successful: ${email}`);
+
+        const creds = readCredentials();
+        this._saveCookie(sessionKey.trim(), null, creds?.orgId);
     }
 
     // --- Diagnostics ---
@@ -666,207 +373,6 @@ class ClaudeHttpFetcher {
     }
 }
 
-// --- Browser Detection (static, used only for login) ---
-
-function findChrome() {
-    // Check VS Code setting first (claudePal.browser override)
-    try {
-        const vscode = require('vscode');
-        const browserOverride = vscode.workspace.getConfiguration('claudePal').get('browser');
-        if (browserOverride) {
-            // If it's an absolute path, use directly; otherwise resolve known browser names
-            if (path.isAbsolute(browserOverride) && fs.existsSync(browserOverride)) {
-                console.log(`Using browser from setting: ${browserOverride}`);
-                return browserOverride;
-            }
-            const name = browserOverride.toLowerCase();
-            const knownBrowsers = {
-                'chrome': process.platform === 'win32'
-                    ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
-                    : process.platform === 'darwin'
-                        ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
-                        : '/usr/bin/google-chrome',
-                'edge': process.platform === 'win32'
-                    ? 'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe'
-                    : '/usr/bin/microsoft-edge',
-                'brave': process.platform === 'win32'
-                    ? 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe'
-                    : '/usr/bin/brave-browser',
-            };
-            if (knownBrowsers[name] && fs.existsSync(knownBrowsers[name])) {
-                console.log(`Using browser from setting (${name}): ${knownBrowsers[name]}`);
-                return knownBrowsers[name];
-            }
-        }
-    } catch { /* not in VS Code context, continue with default detection */ }
-
-    const defaultBrowser = getDefaultBrowser();
-    if (defaultBrowser) {
-        console.log(`Using default browser: ${defaultBrowser}`);
-        return defaultBrowser;
-    }
-
-    console.log('Default browser not Chromium-based, searching for installed browsers...');
-
-    const browserPaths = [];
-
-    if (process.platform === 'win32') {
-        browserPaths.push(
-            'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-            'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-            path.join(os.homedir(), 'AppData', 'Local', 'Google', 'Chrome', 'Application', 'chrome.exe'),
-            'C:\\AppInstall\\scoop\\apps\\googlechrome\\current\\chrome.exe',
-            path.join(os.homedir(), 'AppData', 'Local', 'BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe'),
-            'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe',
-            'C:\\Program Files (x86)\\BraveSoftware\\Brave-Browser\\Application\\brave.exe',
-            'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-            'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
-        );
-    } else if (process.platform === 'darwin') {
-        browserPaths.push(
-            '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-            path.join(os.homedir(), 'Applications', 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome'),
-            '/Applications/Chromium.app/Contents/MacOS/Chromium',
-            path.join(os.homedir(), 'Applications', 'Chromium.app', 'Contents', 'MacOS', 'Chromium'),
-            '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
-            path.join(os.homedir(), 'Applications', 'Brave Browser.app', 'Contents', 'MacOS', 'Brave Browser'),
-            '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-            path.join(os.homedir(), 'Applications', 'Microsoft Edge.app', 'Contents', 'MacOS', 'Microsoft Edge'),
-            '/Applications/Arc.app/Contents/MacOS/Arc',
-            path.join(os.homedir(), 'Applications', 'Arc.app', 'Contents', 'MacOS', 'Arc'),
-            '/Applications/Vivaldi.app/Contents/MacOS/Vivaldi',
-            path.join(os.homedir(), 'Applications', 'Vivaldi.app', 'Contents', 'MacOS', 'Vivaldi'),
-            '/Applications/Opera.app/Contents/MacOS/Opera',
-            path.join(os.homedir(), 'Applications', 'Opera.app', 'Contents', 'MacOS', 'Opera')
-        );
-    } else {
-        browserPaths.push(
-            '/usr/bin/google-chrome',
-            '/usr/bin/google-chrome-stable',
-            '/snap/bin/google-chrome',
-            '/var/lib/flatpak/app/com.google.Chrome/current/active/export/bin/com.google.Chrome',
-            '/usr/bin/chromium-browser',
-            '/usr/bin/chromium',
-            '/snap/bin/chromium',
-            '/var/lib/flatpak/app/org.chromium.Chromium/current/active/export/bin/org.chromium.Chromium',
-            '/usr/bin/brave-browser',
-            '/usr/bin/brave',
-            '/snap/bin/brave',
-            '/opt/brave.com/brave/brave-browser',
-            '/var/lib/flatpak/app/com.brave.Browser/current/active/export/bin/com.brave.Browser',
-            '/usr/bin/microsoft-edge',
-            '/usr/bin/microsoft-edge-stable'
-        );
-    }
-
-    for (const browserPath of browserPaths) {
-        try {
-            if (fs.existsSync(browserPath)) {
-                console.log(`Found browser at: ${browserPath}`);
-                return browserPath;
-            }
-        } catch {
-            // Continue to next path
-        }
-    }
-
-    return null;
-}
-
-function getDefaultBrowser() {
-    try {
-        if (process.platform === 'linux') {
-            return getDefaultBrowserLinux();
-        } else if (process.platform === 'darwin') {
-            return getDefaultBrowserMacOS();
-        } else if (process.platform === 'win32') {
-            return getDefaultBrowserWindows();
-        }
-    } catch (err) {
-        console.log('Default browser detection failed:', err.message);
-    }
-    return null;
-}
-
-function getDefaultBrowserLinux() {
-    try {
-        const desktopFile = execSync('xdg-mime query default x-scheme-handler/http', {
-            encoding: 'utf8',
-            timeout: 5000
-        }).trim().toLowerCase();
-
-        const browserMap = CHROMIUM_BROWSERS.linux;
-        for (const [pattern, paths] of Object.entries(browserMap)) {
-            if (desktopFile.includes(pattern.replace('.desktop', '')) || desktopFile === pattern) {
-                for (const browserPath of paths) {
-                    if (fs.existsSync(browserPath)) {
-                        return browserPath;
-                    }
-                }
-            }
-        }
-    } catch (err) {
-        console.log('xdg-mime query failed:', err.message);
-    }
-    return null;
-}
-
-function getDefaultBrowserMacOS() {
-    try {
-        const bundleId = execSync(
-            'defaults read ~/Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure LSHandlers | grep -B1 "https" | grep "LSHandlerRoleAll" | head -1 | sed \'s/.*= "\\(.*\\)";/\\1/\'',
-            { encoding: 'utf8', timeout: 5000, shell: '/bin/bash' }
-        ).trim().toLowerCase();
-
-        const browserMap = CHROMIUM_BROWSERS.darwin;
-        for (const [pattern, appPath] of Object.entries(browserMap)) {
-            if (bundleId.includes(pattern.toLowerCase())) {
-                const systemPath = appPath;
-                const userPath = appPath.replace('/Applications/', path.join(os.homedir(), 'Applications') + '/');
-
-                if (fs.existsSync(systemPath)) return systemPath;
-                if (fs.existsSync(userPath)) return userPath;
-            }
-        }
-    } catch (err) {
-        console.log('macOS default browser detection failed:', err.message);
-    }
-    return null;
-}
-
-function getDefaultBrowserWindows() {
-    try {
-        const progId = execSync(
-            'reg query "HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\http\\UserChoice" /v ProgId',
-            { encoding: 'utf8', timeout: 5000 }
-        );
-
-        const match = progId.match(/ProgId\s+REG_SZ\s+(\S+)/i);
-        if (!match) return null;
-
-        const progIdValue = match[1].toLowerCase();
-
-        const browserMap = CHROMIUM_BROWSERS.win32;
-        for (const [pattern, relativePath] of Object.entries(browserMap)) {
-            if (progIdValue.includes(pattern)) {
-                const possiblePaths = [
-                    path.join(process.env.PROGRAMFILES || 'C:\\Program Files', relativePath),
-                    path.join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', relativePath),
-                    path.join(os.homedir(), 'AppData', 'Local', relativePath),
-                ];
-
-                for (const browserPath of possiblePaths) {
-                    if (fs.existsSync(browserPath)) return browserPath;
-                }
-            }
-        }
-    } catch (err) {
-        console.log('Windows registry query failed:', err.message);
-    }
-    return null;
-}
-
 module.exports = {
     ClaudeHttpFetcher,
-    findChrome,
 };

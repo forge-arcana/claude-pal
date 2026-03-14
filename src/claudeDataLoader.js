@@ -140,122 +140,6 @@ class ClaudeDataLoader {
         return jsonlFiles;
     }
 
-    async parseJsonlFile(filePath) {
-        const records = [];
-
-        try {
-            const content = await fs.readFile(filePath, 'utf-8');
-            const lines = splitLines(content).filter(line => line.trim());
-
-            for (const line of lines) {
-                try {
-                    const record = JSON.parse(line);
-
-                    if (this.isValidUsageRecord(record)) {
-                        records.push(record);
-                    }
-                } catch (parseError) {
-                    console.warn(`Failed to parse line in ${filePath}:`, parseError.message);
-                }
-            }
-        } catch (error) {
-            console.error(`Error reading JSONL file ${filePath}:`, error.message);
-        }
-
-        return records;
-    }
-
-    isValidUsageRecord(record) {
-        return record &&
-            record.message &&
-            record.message.usage &&
-            typeof record.message.usage.input_tokens === 'number' &&
-            typeof record.message.usage.output_tokens === 'number' &&
-            record.message.model !== '<synthetic>' &&
-            !record.isApiErrorMessage;
-    }
-
-    getRecordHash(record) {
-        const messageId = record.message?.id || '';
-        const requestId = record.requestId || '';
-        return `${messageId}-${requestId}`;
-    }
-
-    calculateTotalTokens(usage) {
-        return (usage.input_tokens || 0) +
-               (usage.output_tokens || 0) +
-               (usage.cache_creation_input_tokens || 0) +
-               (usage.cache_read_input_tokens || 0);
-    }
-
-    async loadUsageRecords(sinceTimestamp = null) {
-        const dataDir = await this.findClaudeDataDirectory();
-        if (!dataDir) {
-            return {
-                totalTokens: 0,
-                inputTokens: 0,
-                outputTokens: 0,
-                cacheCreationTokens: 0,
-                cacheReadTokens: 0,
-                messageCount: 0,
-                records: []
-            };
-        }
-
-        const jsonlFiles = await this.findJsonlFiles(dataDir);
-        this.log(`Found ${jsonlFiles.length} JSONL files in ${dataDir}`);
-
-        const allRecords = [];
-        for (const filePath of jsonlFiles) {
-            const records = await this.parseJsonlFile(filePath);
-            allRecords.push(...records);
-        }
-
-        let filteredRecords = allRecords;
-        if (sinceTimestamp) {
-            filteredRecords = allRecords.filter(record => {
-                const recordTime = new Date(record.timestamp).getTime();
-                return recordTime >= sinceTimestamp;
-            });
-        }
-
-        const uniqueRecords = [];
-        const seenHashes = new Set();
-        for (const record of filteredRecords) {
-            const hash = this.getRecordHash(record);
-            if (!seenHashes.has(hash)) {
-                seenHashes.add(hash);
-                uniqueRecords.push(record);
-            }
-        }
-
-        let totalInputTokens = 0;
-        let totalOutputTokens = 0;
-        let totalCacheCreationTokens = 0;
-        let totalCacheReadTokens = 0;
-
-        for (const record of uniqueRecords) {
-            const usage = record.message.usage;
-            totalInputTokens += usage.input_tokens || 0;
-            totalOutputTokens += usage.output_tokens || 0;
-            totalCacheCreationTokens += usage.cache_creation_input_tokens || 0;
-            totalCacheReadTokens += usage.cache_read_input_tokens || 0;
-        }
-
-        const totalTokens = totalInputTokens + totalOutputTokens +
-                           totalCacheCreationTokens + totalCacheReadTokens;
-
-        return {
-            totalTokens,
-            inputTokens: totalInputTokens,
-            outputTokens: totalOutputTokens,
-            cacheCreationTokens: totalCacheCreationTokens,
-            cacheReadTokens: totalCacheReadTokens,
-            messageCount: uniqueRecords.length,
-            records: uniqueRecords
-        };
-    }
-
     // Extract cache_read from most recent assistant message as session context size
     // Only searches project-specific directory when workspace is set to avoid cross-project data
     async getCurrentSessionUsage() {
@@ -492,11 +376,6 @@ class ClaudeDataLoader {
         return null;
     }
 
-    async getTodayUsage() {
-        const startOfDay = new Date();
-        startOfDay.setHours(0, 0, 0, 0);
-        return await this.loadUsageRecords(startOfDay.getTime());
-    }
 }
 
 module.exports = { ClaudeDataLoader };

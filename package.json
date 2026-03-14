@@ -3,8 +3,12 @@
   "displayName": "Forge: Claude Pal",
   "description": "Complete Claude.ai monitoring: usage limits, token tracking, sound notifications, and alerts — all in one extension.",
   "version": "1.0.0",
-  "publisher": "forge",
+  "publisher": "saint-cygnum",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/saint-cygnum/claude-pal"
+  },
   "icon": "assets/claude-pal-icon-128.png",
   "galleryBanner": {
     "color": "#1a1a2e",
@@ -75,22 +79,12 @@
         "title": "Open Claude Settings Page",
         "category": "Claude Pal"
       },
-      {
-        "command": "claudePal.startNewSession",
-        "title": "Start New Claude Code Session",
-        "category": "Claude Pal"
-      },
-      {
+{
         "command": "claudePal.showDebug",
         "title": "Show Debug Output",
         "category": "Claude Pal"
       },
-      {
-        "command": "claudePal.resetConnection",
-        "title": "Reset Browser Connection (Legacy)",
-        "category": "Claude Pal"
-      },
-      {
+{
         "command": "claudePal.clearSession",
         "title": "Clear Session (Re-login)",
         "category": "Claude Pal"
@@ -110,6 +104,14 @@
         "title": "Claude Pal: Toggle Sound Notifications"
       },
       {
+        "command": "claudePal.changePromptSound",
+        "title": "Claude Pal: Change Prompt Sound"
+      },
+      {
+        "command": "claudePal.changeDoneSound",
+        "title": "Claude Pal: Change Done Sound"
+      },
+      {
         "command": "claudePal.showMenu",
         "title": "Claude Pal: Show Menu",
         "category": "Claude Pal"
@@ -118,11 +120,6 @@
     "configuration": {
       "title": "Claude Pal",
       "properties": {
-        "claudePal.fetchOnStartup": {
-          "type": "boolean",
-          "default": true,
-          "description": "Automatically fetch usage data when VS Code starts"
-        },
         "claudePal.autoRefreshMinutes": {
           "type": "number",
           "default": 5,
@@ -130,119 +127,15 @@
           "maximum": 60,
           "description": "Auto-refresh interval in minutes for fetching Claude.ai usage data (1-60 minutes)"
         },
-        "claudePal.statusBar.showServiceStatus": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show Claude service status indicator. When enabled, displays a warning/error icon if Claude services are degraded or experiencing an outage."
-        },
-        "claudePal.statusBar.timeFormat": {
-          "type": "string",
-          "enum": [
-            "12hour",
-            "24hour",
-            "countdown"
-          ],
-          "default": "countdown",
-          "enumDescriptions": [
-            "12-hour format with AM/PM (e.g., 2:30 PM)",
-            "24-hour format (e.g., 14:30)",
-            "Countdown timer (e.g., 2h 15m)"
-          ],
-          "markdownDescription": "How to display reset times in the status bar"
-        },
-        "claudePal.statusBar.alignment": {
-          "type": "string",
-          "enum": [
-            "left",
-            "right"
-          ],
-          "default": "right",
-          "description": "Status bar alignment (left or right side). Requires window reload to take effect."
-        },
-        "claudePal.statusBar.priority": {
-          "type": "number",
-          "default": 100,
-          "minimum": 0,
-          "maximum": 10000,
-          "description": "Status bar priority (higher values position items closer to the center). Requires window reload to take effect."
-        },
-        "claudePal.statusBar.usageFormat": {
-          "type": "string",
-          "enum": [
-            "percent",
-            "barLight",
-            "barSolid",
-            "barSquare",
-            "barCircle"
-          ],
-          "default": "barCircle",
-          "enumDescriptions": [
-            "Percentage (e.g., 60%)",
-            "Light blocks (e.g., ▓▓▓░░)",
-            "Solid blocks (e.g., ███░░)",
-            "Squares (e.g., ■■■□□)",
-            "Circles (e.g., ●●●○○)"
-          ],
-          "markdownDescription": "How to display usage values in the status bar"
-        },
-        "claudePal.thresholds.warning": {
-          "type": "number",
-          "default": 80,
-          "minimum": 1,
-          "maximum": 100,
-          "description": "Usage percentage to show warning (yellow) indicator"
-        },
-        "claudePal.thresholds.error": {
-          "type": "number",
-          "default": 90,
-          "minimum": 1,
-          "maximum": 100,
-          "description": "Usage percentage to show error (red) indicator"
-        },
         "claudePal.debug": {
           "type": "boolean",
           "default": false,
           "description": "Enable debug logging to output channel (for troubleshooting)"
-        },
-        "claudePal.debugLogFile": {
-          "type": "string",
-          "default": "",
-          "description": "Path to debug log file. Auto-populated on first run. Supports ~ for home directory."
-        },
-        "claudePal.debugLogMaxSizeKB": {
-          "type": "number",
-          "default": 256,
-          "minimum": 64,
-          "maximum": 2048,
-          "description": "Maximum debug log file size in KB. Oldest entries are trimmed when exceeded (64-2048 KB, default 256 KB)"
-        },
-        "claudePal.browser": {
-          "type": "string",
-          "description": "Override browser for login (e.g. 'chrome', 'edge', 'brave', or full path)"
-        },
-        "claudePal.useLegacyScraper": {
-          "type": "boolean",
-          "default": false,
-          "description": "Use legacy browser-based scraper instead of streamlined HTTP fetching. The default HTTP method calls undocumented Claude.ai API endpoints that could change without notice. Enable this fallback if the HTTP method stops working due to API changes. Requires a Chromium-based browser (Chrome, Edge, Brave, etc.)."
-        },
-        "claudePal.notifications.toolPrompt.sound": {
-          "type": "string",
-          "enum": ["Glass", "ding", "chimes", "Ping", "Funk", "off"],
-          "default": "Glass",
-          "description": "Sound when Claude needs permission to use a tool. 'off' to disable."
-        },
-        "claudePal.notifications.taskComplete.sound": {
-          "type": "string",
-          "enum": ["Hero", "tada", "chord", "Pop", "Submarine", "off"],
-          "default": "Hero",
-          "description": "Sound when Claude finishes a task. 'off' to disable."
         }
       }
     }
   },
-  "dependencies": {
-    "puppeteer-core": "^24.37.5"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/vscode": "^1.109.0",

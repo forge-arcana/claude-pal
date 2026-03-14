@@ -7,9 +7,10 @@
 // Copyright: (c) 2026 forge
 
 const vscode = require('vscode');
-const { COMMANDS, CONFIG_NAMESPACE, calculateResetClockTime, calculateResetClockTimeExpanded, getCurrencySymbol, getUse24HourTime, formatModelName, capitalizeFirst } = require('./utils');
+const { COMMANDS, calculateResetClockTime, calculateResetClockTimeExpanded, getCurrencySymbol, formatModelName, capitalizeFirst } = require('./utils');
 const { fetchServiceStatus, getStatusDisplay, formatStatusTime, STATUS_PAGE_URL } = require('./serviceStatus');
 const { formatSubscriptionType, formatRateLimitTier } = require('./credentialsReader');
+const { isSoundMuted } = require('./notifier');
 
 // Service status state
 let currentServiceStatus = null;
@@ -21,67 +22,22 @@ let spinnerIndex = 0;
 let spinnerInterval = null;
 let isSpinnerActive = false;
 
-// Status bar items (3 only: label, session, weekly)
+// Single unified status bar item
 let statusBarItems = {
     label: null,
-    session: null,
-    weekly: null
-};
-
-// Track last displayed values to avoid unnecessary DOM updates
-let lastDisplayedValues = {
-    sessionText: null,
-    weeklyText: null
 };
 
 // ---------------------------------------------------------------------------
 // Settings helpers
 // ---------------------------------------------------------------------------
 
-function isServiceStatusEnabled() {
-    const config = vscode.workspace.getConfiguration(CONFIG_NAMESPACE);
-    return config.get('statusBar.showServiceStatus', true);
-}
-
-function getStatusBarAlignment() {
-    const config = vscode.workspace.getConfiguration(CONFIG_NAMESPACE);
-    const alignment = config.get('statusBar.alignment', 'right');
-    return alignment === 'left' ? vscode.StatusBarAlignment.Left : vscode.StatusBarAlignment.Right;
-}
-
-function getStatusBarPriority() {
-    const config = vscode.workspace.getConfiguration(CONFIG_NAMESPACE);
-    return config.get('statusBar.priority', 100);
-}
-
-function getUsageFormat() {
-    const config = vscode.workspace.getConfiguration(CONFIG_NAMESPACE);
-    return config.get('statusBar.usageFormat', 'barCircle');
-}
-
-// ---------------------------------------------------------------------------
-// Bar rendering
-// ---------------------------------------------------------------------------
-
-const BAR_STYLES = {
-    barLight: { filled: '▓', empty: '░' },
-    barSolid: { filled: '█', empty: '░' },
-    barSquare: { filled: '■', empty: '□' },
-    barCircle: { filled: '●', empty: '○' }
-};
-
-function formatAsBar(percent, style, width = 5) {
-    const clamped = Math.max(0, Math.min(100, percent));
-    const filled = Math.round(clamped / 100 * width);
-    const chars = BAR_STYLES[style] || BAR_STYLES.barLight;
-    return chars.filled.repeat(filled) + chars.empty.repeat(width - filled);
-}
+// Hardcoded defaults (removed from user settings)
+const STATUS_BAR_ALIGNMENT = vscode.StatusBarAlignment.Right;
+const STATUS_BAR_PRIORITY = 100;
+const WARNING_THRESHOLD = 80;
+const ERROR_THRESHOLD = 90;
 
 function formatPercent(percent) {
-    const format = getUsageFormat();
-    if (format !== 'percent') {
-        return formatAsBar(percent, format);
-    }
     return `${percent}%`;
 }
 
@@ -135,7 +91,7 @@ function getLabelText(credentialsInfo, modelInfo, permissionMode) {
         text += ' $(shield)';
     }
 
-    if (isServiceStatusEnabled() && currentServiceStatus && currentServiceStatus.indicator !== 'none') {
+    if (true && currentServiceStatus && currentServiceStatus.indicator !== 'none') {
         const display = getStatusDisplay(currentServiceStatus.indicator);
         return `${display.icon} ${text}`;
     }
@@ -143,7 +99,7 @@ function getLabelText(credentialsInfo, modelInfo, permissionMode) {
 }
 
 function getServiceStatusColor() {
-    if (isServiceStatusEnabled() && currentServiceStatus) {
+    if (true && currentServiceStatus) {
         const display = getStatusDisplay(currentServiceStatus.indicator);
         if (display.color) {
             return new vscode.ThemeColor(display.color);
@@ -158,7 +114,7 @@ function getServiceStatusColor() {
 
 function getServiceStatusTooltipLines() {
     const lines = [];
-    if (!isServiceStatusEnabled()) return lines;
+    if (!true) return lines;
 
     if (currentServiceStatus) {
         const display = getStatusDisplay(currentServiceStatus.indicator);
@@ -180,7 +136,7 @@ function getServiceStatusTooltipLines() {
 }
 
 async function refreshServiceStatus() {
-    if (!isServiceStatusEnabled()) return null;
+    if (!true) return null;
 
     try {
         currentServiceStatus = await fetchServiceStatus();
@@ -220,11 +176,80 @@ function getServiceStatus() {
 // ---------------------------------------------------------------------------
 
 function setAllTooltips(tooltip) {
-    Object.values(statusBarItems).forEach(item => {
-        if (item) {
-            item.tooltip = tooltip;
+    if (statusBarItems.label) {
+        statusBarItems.label.tooltip = tooltip;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tooltip action links (command links rendered in hover panel)
+// ---------------------------------------------------------------------------
+
+function buildHeaderLine(title, credentialsInfo, modelInfo) {
+    const parts = [];
+    if (credentialsInfo) {
+        const plan = formatSubscriptionType(credentialsInfo.subscriptionType);
+        const tier = formatRateLimitTier(credentialsInfo.rateLimitTier);
+        if (plan && tier && tier.startsWith(plan)) {
+            parts.push(tier);
+        } else if (plan && tier && tier !== plan) {
+            parts.push(`${plan} · ${tier}`);
+        } else if (tier) {
+            parts.push(tier);
+        } else if (plan) {
+            parts.push(plan);
         }
+    }
+    if (modelInfo && modelInfo.modelDisplay) {
+        parts.push(modelInfo.modelDisplay);
+        if (modelInfo.hasThinking && modelInfo.effortLevel) {
+            parts.push(`Thinking (${modelInfo.effortLevel})`);
+        } else if (modelInfo.hasThinking) {
+            parts.push('Thinking');
+        }
+    }
+    if (parts.length > 0) {
+        return `**${title}** — ${parts.join(' · ')}`;
+    }
+    return `**${title}**`;
+}
+
+function buildPermissionLinks(currentMode) {
+    const lines = [];
+    const modes = [
+        { mode: 'yolo', label: '$(zap) YOLO', desc: 'Approve All' },
+        { mode: 'yolo-safe', label: '$(shield) Safe', desc: 'Non-destructive' },
+        { mode: 'normal', label: '$(lock) Normal', desc: 'Ask Permission' },
+    ];
+    const parts = modes.map(m => {
+        if (m.mode === currentMode) return `**${m.label}**`;
+        return `[${m.label}](command:claudePal.setMode.${m.mode})`;
     });
+    lines.push(`Permissions: ${parts.join(' · ')}`);
+    return lines;
+}
+
+function buildActionLinks(currentMode) {
+    const lines = [];
+    lines.push(...buildPermissionLinks(currentMode));
+    const muted = isSoundMuted();
+    lines.push(`Sound: [$(unmute) On](command:claudePal.soundOn)${!muted ? ' ✓' : ''} · [$(mute) Off](command:claudePal.soundOff)${muted ? ' ✓' : ''} · [$(play) Prompt](command:claudePal.changePromptSound) · [$(play) Done](command:claudePal.changeDoneSound)`);
+    lines.push('[$(gear) Extension Settings](command:workbench.action.openSettings?"claudePal")');
+    lines.push('[$(sync) Refresh Usage](command:claudePal.resyncAccount)');
+    return lines;
+}
+
+function buildTooltipWithActions(currentMode, credentialsInfo = null, modelInfo = null) {
+    const header = buildHeaderLine('Claude Pal', credentialsInfo, modelInfo);
+    const lines = [header];
+
+    lines.push('');
+    lines.push(...buildActionLinks(currentMode));
+
+    const md = new vscode.MarkdownString(lines.join('  \n'));
+    md.isTrusted = true;
+    md.supportThemeIcons = true;
+    return md;
 }
 
 // ---------------------------------------------------------------------------
@@ -232,87 +257,43 @@ function setAllTooltips(tooltip) {
 // ---------------------------------------------------------------------------
 
 function createStatusBarItem(context) {
-    const alignment = getStatusBarAlignment();
-    const basePriority = getStatusBarPriority();
-
-    statusBarItems.label = vscode.window.createStatusBarItem(alignment, basePriority);
+    statusBarItems.label = vscode.window.createStatusBarItem(STATUS_BAR_ALIGNMENT, STATUS_BAR_PRIORITY);
     statusBarItems.label.command = COMMANDS.SHOW_MENU;
-    statusBarItems.label.text = 'Claude  ';
+    statusBarItems.label.text = 'Claude';
     statusBarItems.label.show();
     context.subscriptions.push(statusBarItems.label);
-
-    statusBarItems.session = vscode.window.createStatusBarItem(alignment, basePriority - 1);
-    statusBarItems.session.command = COMMANDS.SHOW_MENU;
-    context.subscriptions.push(statusBarItems.session);
-
-    statusBarItems.weekly = vscode.window.createStatusBarItem(alignment, basePriority - 2);
-    statusBarItems.weekly.command = COMMANDS.SHOW_MENU;
-    context.subscriptions.push(statusBarItems.weekly);
 
     return statusBarItems.label;
 }
 
 function updateStatusBar(item, usageData, activityStats = null, sessionData = null, credentialsInfo = null, modelInfo = null, permissionMode = null) {
-    const config = vscode.workspace.getConfiguration(CONFIG_NAMESPACE);
-
-    const globalWarning = config.get('thresholds.warning', 80);
-    const globalError = config.get('thresholds.error', 90);
-
-    const getThresholds = (gauge) => {
-        const warning = config.get(`thresholds.${gauge}.warning`);
-        const error = config.get(`thresholds.${gauge}.error`);
-        return {
-            warning: (warning !== undefined && warning !== null && warning > 0) ? warning : globalWarning,
-            error: (error !== undefined && error !== null && error > 0) ? error : globalError
-        };
-    };
-
-    const sessionThresholds = getThresholds('session');
-    const weeklyThresholds = getThresholds('weekly');
+    const sessionThresholds = { warning: WARNING_THRESHOLD, error: ERROR_THRESHOLD };
+    const weeklyThresholds = { warning: WARNING_THRESHOLD, error: ERROR_THRESHOLD };
 
     // --- No data yet ---
     if (!usageData) {
         if (!isSpinnerActive) {
             if (statusBarItems.label) {
-                statusBarItems.label.text = `${getLabelText(credentialsInfo, modelInfo, permissionMode)}  `;
+                statusBarItems.label.text = getLabelText(credentialsInfo, modelInfo, permissionMode);
                 statusBarItems.label.color = getServiceStatusColor();
             }
-            setAllTooltips('Click to fetch Claude usage data');
-            statusBarItems.session.hide();
-            statusBarItems.weekly.hide();
+            const noDataTooltip = buildTooltipWithActions(permissionMode, credentialsInfo, modelInfo);
+            setAllTooltips(noDataTooltip);
         }
         return;
-    }
-
-    // --- Update label ---
-    if (!isSpinnerActive && statusBarItems.label) {
-        statusBarItems.label.text = `${getLabelText(credentialsInfo, modelInfo, permissionMode)}  `;
-        statusBarItems.label.color = getServiceStatusColor();
     }
 
     // --- Build tooltip ---
     const tooltipLines = [];
 
-    // Account + plan header
+    // Account + plan + model header (single line)
     const rawAccountName = usageData.accountInfo?.name;
     const accountName = rawAccountName
         ? rawAccountName.replace(/'s Organi[sz]ation$/, '')
         : null;
-    if (accountName) {
-        tooltipLines.push(`**${accountName}**`);
-    }
-    if (credentialsInfo) {
-        const plan = formatSubscriptionType(credentialsInfo.subscriptionType);
-        const tier = formatRateLimitTier(credentialsInfo.rateLimitTier);
-        if (plan && tier && tier !== plan) {
-            tooltipLines.push(`${plan} · ${tier}`);
-        } else if (plan) {
-            tooltipLines.push(plan);
-        }
-    }
-    if (accountName || credentialsInfo) {
-        tooltipLines.push('');
-    }
+    const headerTitle = accountName || 'Claude Pal';
+    tooltipLines.push(buildHeaderLine(headerTitle, credentialsInfo, modelInfo));
+    tooltipLines.push('');
 
     // Session
     let sessionPercent = null;
@@ -335,14 +316,7 @@ function updateStatusBar(item, usageData, activityStats = null, sessionData = nu
 
     if (usageData.usagePercentWeek !== undefined && usageData.usagePercentWeek !== null) {
         weeklyPercent = usageData.usagePercentWeek;
-        const weeklyPrecisionThreshold = config.get('statusBar.weeklyPrecisionThreshold', 75);
-        const resetTimeStr = usageData.resetTimeWeek || '';
-        const isWithin24hrs = !resetTimeStr.includes('d');
-        const needsMinutePrecision = isWithin24hrs && weeklyPercent >= weeklyPrecisionThreshold;
-        const weeklyTimeFormat = needsMinutePrecision
-            ? { hour: 'numeric', minute: '2-digit' }
-            : { hour: 'numeric' };
-        weeklyResetTime = calculateResetClockTime(usageData.resetTimeWeek, weeklyTimeFormat);
+        weeklyResetTime = calculateResetClockTime(usageData.resetTimeWeek);
         const weeklyResetTimeExpanded = calculateResetClockTimeExpanded(usageData.resetTimeWeek);
         weeklyStatus = getIconAndColor(weeklyPercent, weeklyThresholds.warning, weeklyThresholds.error);
 
@@ -391,57 +365,43 @@ function updateStatusBar(item, usageData, activityStats = null, sessionData = nu
     // Service status
     tooltipLines.push(...getServiceStatusTooltipLines());
 
+    // Actions
+    tooltipLines.push('');
+    tooltipLines.push(...buildActionLinks(permissionMode));
+
     // Footer
     tooltipLines.push('');
     if (usageData.timestamp) {
-        tooltipLines.push(`Updated: ${usageData.timestamp.toLocaleTimeString(undefined, { hour12: !getUse24HourTime() })}`);
+        tooltipLines.push(`Updated: ${usageData.timestamp.toLocaleTimeString()}`);
     }
-    const extVersion = vscode.extensions.getExtension('forge.claude-pal')?.packageJSON?.version;
-    if (extVersion) {
-        tooltipLines.push(`Claude Pal v${extVersion}`);
-    }
-    tooltipLines.push('[Click to resync account](command:claudePal.resyncAccount)');
 
     const markdown = new vscode.MarkdownString(tooltipLines.join('  \n'));
     markdown.isTrusted = true;
+    markdown.supportThemeIcons = true;
     if (!isSpinnerActive) {
         setAllTooltips(markdown);
     }
 
-    // --- Render session bar item ---
-    let newSessionText = null;
-    if (sessionPercent !== null) {
-        const sessionDisplay = formatPercent(sessionPercent);
-        newSessionText = `${sessionStatus.icon ? sessionStatus.icon + ' ' : ''}Se ${sessionDisplay} $(history) ${sessionResetTime}`;
-    }
+    // --- Render unified status bar text ---
+    if (!isSpinnerActive && statusBarItems.label) {
+        const parts = [getLabelText(credentialsInfo, modelInfo, permissionMode)];
 
-    if (newSessionText !== lastDisplayedValues.sessionText) {
-        if (newSessionText) {
-            statusBarItems.session.text = newSessionText;
-            statusBarItems.session.color = sessionStatus.color;
-            statusBarItems.session.show();
-        } else {
-            statusBarItems.session.hide();
+        if (sessionPercent !== null) {
+            parts.push(`${formatPercent(sessionPercent)} ${sessionResetTime}`);
         }
-        lastDisplayedValues.sessionText = newSessionText;
-    }
-
-    // --- Render weekly bar item ---
-    let newWeeklyText = null;
-    if (weeklyPercent !== null) {
-        const weeklyDisplay = formatPercent(weeklyPercent);
-        newWeeklyText = `${weeklyStatus.icon ? weeklyStatus.icon + ' ' : ''}Wk ${weeklyDisplay} $(history) ${weeklyResetTime}`;
-    }
-
-    if (newWeeklyText !== lastDisplayedValues.weeklyText) {
-        if (newWeeklyText) {
-            statusBarItems.weekly.text = newWeeklyText;
-            statusBarItems.weekly.color = weeklyStatus.color;
-            statusBarItems.weekly.show();
-        } else {
-            statusBarItems.weekly.hide();
+        if (weeklyPercent !== null) {
+            parts.push(`${formatPercent(weeklyPercent)} ${weeklyResetTime}`);
         }
-        lastDisplayedValues.weeklyText = newWeeklyText;
+
+        statusBarItems.label.text = parts.join(' | ');
+
+        // Use the worst color (error > warning > normal)
+        const worstStatus = sessionStatus.level === 'error' || weeklyStatus.level === 'error'
+            ? sessionStatus.level === 'error' ? sessionStatus : weeklyStatus
+            : sessionStatus.level === 'warning' || weeklyStatus.level === 'warning'
+                ? sessionStatus.level === 'warning' ? sessionStatus : weeklyStatus
+                : { color: getServiceStatusColor() };
+        statusBarItems.label.color = worstStatus.color || getServiceStatusColor();
     }
 }
 
@@ -486,50 +446,31 @@ function stopSpinner(webError = null, tokenError = null) {
             '**Actions**',
             '• Click to retry',
             '• Run "Claude Pal: Show Debug Output" for details',
-            '• Run "Claude Pal: Clear Session (Re-login)" to re-authenticate'
+            '[$(output) Debug](command:claudePal.showDebug) · [$(trash) Clear Session](command:claudePal.clearSession)'
         ];
-        setAllTooltips(new vscode.MarkdownString(errorLines.join('  \n')));
+        const md1 = new vscode.MarkdownString(errorLines.join('  \n'));
+        md1.isTrusted = true;
+        md1.supportThemeIcons = true;
+        setAllTooltips(md1);
 
         if (statusBarItems.label) {
             statusBarItems.label.text = `${statusBarItems.label.text.replace(/ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]$/, '').trim()} ✗`;
             statusBarItems.label.color = new vscode.ThemeColor('errorForeground');
         }
     } else if (webError) {
-        const config = vscode.workspace.getConfiguration(CONFIG_NAMESPACE);
-        const isLoginCancelled = webError.message.includes('Login cancelled');
-        const isTokenOnlyMode = webError.message.includes('token-only mode') || config.get('tokenOnlyMode', false);
-
-        let errorLines;
-        if (isLoginCancelled || isTokenOnlyMode) {
-            errorLines = [
-                '**Token-Only Mode**',
-                '',
-                isLoginCancelled
-                    ? 'Login was cancelled. Showing Claude Code tokens only.'
-                    : 'Token-only mode enabled. Showing Claude Code tokens only.',
-                '',
-                'Claude.ai web usage (session/weekly limits) not available.',
-                '',
-                '**Actions**',
-                '• **Click to retry login**',
-                '• Or enable `claudePal.tokenOnlyMode` in settings to disable this message'
-            ];
-        } else {
-            errorLines = [
-                '**Web Fetch Failed**',
-                '',
-                `Error: ${webError.message}`,
-                '',
-                '**Debug Info**',
-                `Time: ${new Date().toLocaleString()}`,
-                '',
-                '**Actions**',
-                '• Click to retry',
-                '• Run "Claude Pal: Show Debug Output" for details',
-                '• Run "Claude Pal: Clear Session (Re-login)" to re-authenticate'
-            ];
-        }
-        setAllTooltips(new vscode.MarkdownString(errorLines.join('  \n')));
+        const errorLines = [
+            '**Web Fetch Failed**',
+            '',
+            `Error: ${webError.message}`,
+            '',
+            '[$(sync) Retry](command:claudePal.fetchNow)' +
+            ' · [$(output) Debug](command:claudePal.showDebug)' +
+            ' · [$(trash) Clear Session](command:claudePal.clearSession)'
+        ];
+        const md2 = new vscode.MarkdownString(errorLines.join('  \n'));
+        md2.isTrusted = true;
+        md2.supportThemeIcons = true;
+        setAllTooltips(md2);
 
         if (statusBarItems.label) {
             statusBarItems.label.text = `${statusBarItems.label.text.replace(/ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]$/, '').trim()} ⚠`;

@@ -23,10 +23,8 @@ function splitLines(text) {
 const COMMANDS = {
     FETCH_NOW: 'claudePal.fetchNow',
     OPEN_SETTINGS: 'claudePal.openSettings',
-    START_SESSION: 'claudePal.startNewSession',
-    SHOW_DEBUG: 'claudePal.showDebug',
-    RESET_CONNECTION: 'claudePal.resetConnection',
-    CLEAR_SESSION: 'claudePal.clearSession',
+SHOW_DEBUG: 'claudePal.showDebug',
+CLEAR_SESSION: 'claudePal.clearSession',
     OPEN_BROWSER: 'claudePal.openBrowser',
     RESYNC_ACCOUNT: 'claudePal.resyncAccount',
     TOGGLE_SOUND: 'claudePal.toggleSound',
@@ -51,12 +49,6 @@ const CONFIG_DIR = getConfigDir();
 const PATHS = {
     CONFIG_DIR: CONFIG_DIR,
     SESSION_COOKIE_FILE: path.join(CONFIG_DIR, 'session-cookie.json'),
-    SESSION_DATA_FILE: path.join(CONFIG_DIR, 'session-data.json'),
-    USAGE_HISTORY_FILE: path.join(CONFIG_DIR, 'usage-history.json'),
-    // Legacy scraper paths (used when useLegacyScraper is enabled)
-    BROWSER_SESSION_DIR: path.join(CONFIG_DIR, 'browser-session'),
-    BROWSER_LOCK_FILE: path.join(CONFIG_DIR, 'browser.lock'),
-    BROWSER_STATE_FILE: path.join(CONFIG_DIR, 'browser-state.json'),
 };
 
 // Claude Code default context window (tokens)
@@ -75,23 +67,11 @@ class FileLogger {
     }
 
     getLogFilePath() {
-        const config = vscode.workspace.getConfiguration(CONFIG_NAMESPACE);
-        const customPath = config.get('debugLogFile', '');
-        if (customPath && customPath.trim()) {
-            // Expand ~ to home directory
-            let expandedPath = customPath.trim();
-            if (expandedPath.startsWith('~/')) {
-                expandedPath = path.join(os.homedir(), expandedPath.slice(2));
-            }
-            return expandedPath;
-        }
         return path.join(PATHS.CONFIG_DIR, 'debug.log');
     }
 
     getMaxSizeBytes() {
-        const config = vscode.workspace.getConfiguration(CONFIG_NAMESPACE);
-        const maxSizeKB = config.get('debugLogMaxSizeKB', 256);
-        return Math.max(64, Math.min(2048, maxSizeKB)) * 1024;
+        return 256 * 1024; // 256 KB
     }
 
     generateInstanceId(workspacePath) {
@@ -180,23 +160,8 @@ function fileLog(message) {
     getFileLogger().log(message);
 }
 
-function getDefaultDebugLogPath() {
-    return path.join(PATHS.CONFIG_DIR, 'debug.log');
-}
-
-// Timeouts in milliseconds
 const TIMEOUTS = {
-    PAGE_LOAD: 45000,
-    LOGIN_WAIT: 300000,
-    LOGIN_POLL: 2000,
-    API_RETRY_DELAY: 2000,
-    SESSION_DURATION: 3600000
-};
-
-// Legacy scraper viewport (used when useLegacyScraper is enabled)
-const VIEWPORT = {
-    WIDTH: 1280,
-    HEIGHT: 800
+    SESSION_DURATION: 3600000, // 1 hour
 };
 
 const CLAUDE_URLS = {
@@ -234,30 +199,12 @@ function disposeDebugChannel() {
     }
 }
 
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 function getTokenLimit() {
-    const config = vscode.workspace.getConfiguration(CONFIG_NAMESPACE);
-    return config.get('tokenLimit', DEFAULT_TOKEN_LIMIT);
+    return DEFAULT_TOKEN_LIMIT;
 }
 
-function getTimeFormat() {
-    const config = vscode.workspace.getConfiguration(CONFIG_NAMESPACE);
-    return config.get('statusBar.timeFormat', 'countdown');
-}
-
-function getUse24HourTime() {
-    return getTimeFormat() === '24hour';
-}
-
-function getUseCountdownTimer() {
-    return getTimeFormat() === 'countdown';
-}
-
-// Format countdown string (e.g., "2h 15m", "5d 21h")
-function formatCountdown(resetTime) {
+// Format countdown string for status bar (e.g., "2h 15m", "5d 21h")
+function calculateResetClockTime(resetTime) {
     try {
         const days = resetTime.match(/(\d+)d/);
         const hours = resetTime.match(/(\d+)h/);
@@ -266,7 +213,7 @@ function formatCountdown(resetTime) {
         const parts = [];
         if (days) parts.push(`${parseInt(days[1])}d`);
         if (hours) parts.push(`${parseInt(hours[1])}h`);
-        if (minutes && !days) parts.push(`${parseInt(minutes[1])}m`);  // Skip minutes if days shown
+        if (minutes && !days) parts.push(`${parseInt(minutes[1])}m`);
 
         return parts.join(' ') || '0m';
     } catch (error) {
@@ -274,44 +221,7 @@ function formatCountdown(resetTime) {
     }
 }
 
-// Parse relative time string (e.g. "2h 30m", "5d 21h") and calculate reset datetime
-function calculateResetClockTime(resetTime, timeFormat = { hour: 'numeric', minute: '2-digit' }) {
-    // If countdown mode enabled, return the relative time directly
-    if (getUseCountdownTimer()) {
-        return formatCountdown(resetTime);
-    }
-
-    try {
-        const days = resetTime.match(/(\d+)d/);
-        const hours = resetTime.match(/(\d+)h/);
-        const minutes = resetTime.match(/(\d+)m/);
-
-        let totalMinutes = 0;
-        if (days) totalMinutes += parseInt(days[1]) * 24 * 60;
-        if (hours) totalMinutes += parseInt(hours[1]) * 60;
-        if (minutes) totalMinutes += parseInt(minutes[1]);
-
-        const now = new Date();
-        const resetDate = new Date(now.getTime() + totalMinutes * 60 * 1000);
-
-        const hour12 = !getUse24HourTime();
-
-        if (totalMinutes >= 24 * 60) {
-            // Multi-day: show "Fri 15:20" (day name + time) for clarity
-            const dayName = resetDate.toLocaleDateString(undefined, { weekday: 'short' });
-            const timeStr = resetDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', hour12 });
-            return `${dayName} ${timeStr}`;
-        }
-
-        // Within 24 hours: show time
-        const timeStr = resetDate.toLocaleTimeString(undefined, { ...timeFormat, hour12 });
-        return timeStr;
-    } catch (error) {
-        return '??:??';
-    }
-}
-
-// Full datetime format for tooltips
+// Full datetime format for tooltips (uses system locale)
 function calculateResetClockTimeExpanded(resetTime) {
     try {
         const days = resetTime.match(/(\d+)d/);
@@ -331,8 +241,7 @@ function calculateResetClockTimeExpanded(resetTime) {
             day: 'numeric',
             month: 'long',
             hour: 'numeric',
-            minute: '2-digit',
-            hour12: !getUse24HourTime()
+            minute: '2-digit'
         });
     } catch (error) {
         return 'Unknown';
@@ -391,42 +300,25 @@ function capitalizeFirst(str) {
     return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
 }
 
-function formatCompact(value) {
-    if (value >= 1000000) {
-        return `${(value / 1000000).toFixed(1)}M`;
-    } else if (value >= 1000) {
-        return `${(value / 1000).toFixed(1)}K`;
-    }
-    return Math.round(value).toString();
-}
-
 module.exports = {
     CONFIG_NAMESPACE,
     COMMANDS,
     PATHS,
     DEFAULT_TOKEN_LIMIT,
     TIMEOUTS,
-    VIEWPORT,
     CLAUDE_URLS,
     getTokenLimit,
-    getTimeFormat,
-    getUse24HourTime,
-    getUseCountdownTimer,
     setDevMode,
     isDebugEnabled,
     getDebugChannel,
     disposeDebugChannel,
-    sleep,
     calculateResetClockTime,
     calculateResetClockTimeExpanded,
-    formatCountdown,
     getCurrencySymbol,
-    formatCompact,
     formatModelName,
     capitalizeFirst,
     initFileLogger,
     getFileLogger,
     fileLog,
-    getDefaultDebugLogPath,
     splitLines
 };

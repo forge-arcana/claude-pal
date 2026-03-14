@@ -45,16 +45,7 @@ module.exports = [
             'preserve-caught-error': 'off',
         },
     },
-    {
-        // Puppeteer scripts run in browser context
-        files: ['src/scraper.js'],
-        languageOptions: {
-            globals: {
-                document: 'readonly',
-            },
-        },
-    },
-    {
+{
         ignores: ['node_modules/**', '.tmp/**', '*.vsix'],
     },
 ];
