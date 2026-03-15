@@ -2,7 +2,7 @@
   "name": "claude-pal",
   "displayName": "Forge: Claude Pal",
   "description": "Complete Claude.ai monitoring: usage limits, token tracking, sound notifications, and alerts — all in one extension.",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "publisher": "saint-cygnum",
   "license": "MIT",
   "repository": {
