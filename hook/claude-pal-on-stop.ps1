@@ -52,7 +52,7 @@ try { $config = (Get-Content $configFile -Raw) | ConvertFrom-Json } catch {}
 
 $configKey = if ($reason -eq 'question') { 'asksQuestion' } else { 'taskCompleted' }
 $eventCfg = if ($config -and $config.$configKey) { $config.$configKey } else { $null }
-$level = if ($eventCfg -and $eventCfg.level) { $eventCfg.level } else { 'sound+popup' }
+$level = if ($eventCfg -and $eventCfg.level) { $eventCfg.level } else { 'sound' }
 
 if ($level -eq 'off') { exit 0 }
 
@@ -60,26 +60,11 @@ $defaultSounds = @{ question = 'C:\Windows\Media\Windows Notify.wav'; done = 'C:
 $soundName = if ($eventCfg -and $eventCfg.sound) { $eventCfg.sound } else { '' }
 $soundPath = if ($winSounds.ContainsKey($soundName)) { $winSounds[$soundName] } else { $defaultSounds[$reason] }
 
-$messages = @{ question = 'Claude is asking you a question.'; done = 'Claude has finished the task.' }
-
 # Play sound
-if ($level -eq 'sound+popup' -or $level -eq 'sound') {
+if ($level -ne 'off') {
     try {
         if (Test-Path $soundPath) { (New-Object Media.SoundPlayer $soundPath).PlaySync() }
         else { [console]::Beep(800, 300) }
-    } catch {}
-}
-
-# OS notification
-if ($level -eq 'sound+popup' -or $level -eq 'popup') {
-    try {
-        Add-Type -AssemblyName System.Windows.Forms
-        $n = New-Object System.Windows.Forms.NotifyIcon
-        $n.Icon = [System.Drawing.SystemIcons]::Information
-        $n.Visible = $true
-        $n.ShowBalloonTip(3000, 'Claude Pal', $messages[$reason], [System.Windows.Forms.ToolTipIcon]::None)
-        Start-Sleep -Milliseconds 500
-        $n.Dispose()
     } catch {}
 }
 

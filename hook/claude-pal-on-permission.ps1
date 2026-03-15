@@ -27,7 +27,7 @@ $config = $null
 try { $config = (Get-Content $configFile -Raw) | ConvertFrom-Json } catch {}
 
 $eventCfg = if ($config -and $config.needsPermission) { $config.needsPermission } else { $null }
-$level = if ($eventCfg -and $eventCfg.level) { $eventCfg.level } else { 'sound+popup' }
+$level = if ($eventCfg -and $eventCfg.level) { $eventCfg.level } else { 'sound' }
 
 if ($level -eq 'off') { exit 0 }
 
@@ -35,25 +35,10 @@ $soundName = if ($eventCfg -and $eventCfg.sound) { $eventCfg.sound } else { '' }
 $soundPath = if ($winSounds.ContainsKey($soundName)) { $winSounds[$soundName] } else { 'C:\Windows\Media\Windows Notify.wav' }
 
 # Play sound
-if ($level -eq 'sound+popup' -or $level -eq 'sound') {
+if ($level -ne 'off') {
     try {
         if (Test-Path $soundPath) { (New-Object Media.SoundPlayer $soundPath).PlaySync() }
         else { [console]::Beep(800, 300) }
-    } catch {}
-}
-
-# OS notification
-if ($level -eq 'sound+popup' -or $level -eq 'popup') {
-    try {
-        $tool = if ($data.tool_name) { $data.tool_name } else { 'a tool' }
-        $message = "Claude needs permission to use $tool."
-        Add-Type -AssemblyName System.Windows.Forms
-        $n = New-Object System.Windows.Forms.NotifyIcon
-        $n.Icon = [System.Drawing.SystemIcons]::Information
-        $n.Visible = $true
-        $n.ShowBalloonTip(3000, 'Claude Pal', $message, [System.Windows.Forms.ToolTipIcon]::None)
-        Start-Sleep -Milliseconds 500
-        $n.Dispose()
     } catch {}
 }
 
