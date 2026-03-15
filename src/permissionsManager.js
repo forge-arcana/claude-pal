@@ -31,44 +31,60 @@ const YOLO_PERMISSIONS = [
 ];
 
 // YOLO Safe: approve all tools + non-destructive Bash patterns
+// Synced with global CLAUDE.md auto-allowed commands (2026-03-15)
 const YOLO_SAFE_PERMISSIONS = [
     'Read', 'Write', 'Edit', 'Glob', 'Grep',
     'WebFetch(*)', 'WebSearch(*)',
     'Agent', 'TodoWrite', 'NotebookEdit',
-    // Git (read-only / local)
+    // Shell basics
+    'Bash(cd *)', 'Bash(ls*)', 'Bash(pwd)', 'Bash(cat *)', 'Bash(head *)',
+    'Bash(tail *)', 'Bash(echo *)', 'Bash(printf *)', 'Bash(wc *)',
+    'Bash(sort *)', 'Bash(uniq *)', 'Bash(tr *)', 'Bash(cut *)',
+    'Bash(tee *)', 'Bash(test *)',
+    // File operations (non-destructive)
+    'Bash(mkdir *)', 'Bash(cp *)', 'Bash(mv *)', 'Bash(touch *)',
+    'Bash(chmod *)', 'Bash(basename *)', 'Bash(dirname *)', 'Bash(realpath *)',
+    // File inspection
+    'Bash(file *)', 'Bash(stat *)', 'Bash(diff *)',
+    'Bash(which *)', 'Bash(whereis *)', 'Bash(type *)',
+    // Text processing
+    'Bash(sed *)', 'Bash(awk *)', 'Bash(xargs *)',
+    // Search
+    'Bash(find *)', 'Bash(grep *)', 'Bash(rg *)', 'Bash(ag *)',
+    // Node.js / build
+    'Bash(node *)', 'Bash(npm *)', 'Bash(npx *)', 'Bash(pnpm *)',
+    'Bash(tsx *)', 'Bash(tsc*)', 'Bash(vitest*)', 'Bash(playwright*)',
+    'Bash(eslint*)', 'Bash(prettier*)',
+    // Network
+    'Bash(curl *)', 'Bash(wget *)', 'Bash(ping *)',
+    'Bash(ipconfig*)', 'Bash(ip *)', 'Bash(ss *)', 'Bash(netstat*)',
+    // Process (read-only)
+    'Bash(ps *)', 'Bash(kill *)', 'Bash(lsof *)', 'Bash(tasklist*)',
+    // WSL / Docker
+    'Bash(wsl *)', 'Bash(docker *)',
+    'Bash(powershell *)', 'Bash(powershell.exe *)', 'Bash(cmd *)',
+    // Git (safe — excludes push, reset, clean, restore)
     'Bash(git status*)', 'Bash(git diff*)', 'Bash(git log*)',
     'Bash(git add*)', 'Bash(git commit*)', 'Bash(git branch*)',
     'Bash(git checkout*)', 'Bash(git switch*)', 'Bash(git stash*)',
     'Bash(git fetch*)', 'Bash(git rebase*)', 'Bash(git merge*)',
     'Bash(git cherry-pick*)', 'Bash(git show*)', 'Bash(git tag*)',
-    'Bash(git blame*)', 'Bash(git shortlog*)', 'Bash(git describe*)',
-    'Bash(git rev-parse*)', 'Bash(git ls-files*)', 'Bash(git remote*)',
-    'Bash(git config*)', 'Bash(git -C *)',
-    // Node / build
-    'Bash(node *)', 'Bash(npm *)', 'Bash(npx *)', 'Bash(pnpm *)',
-    'Bash(tsx *)', 'Bash(tsc*)', 'Bash(vitest*)', 'Bash(playwright*)',
-    'Bash(eslint*)', 'Bash(prettier*)',
-    // Shell basics (read-only)
-    'Bash(ls*)', 'Bash(pwd)', 'Bash(cat *)', 'Bash(head *)', 'Bash(tail *)',
-    'Bash(wc *)', 'Bash(sort *)', 'Bash(uniq *)', 'Bash(tr *)', 'Bash(cut *)',
-    'Bash(echo *)', 'Bash(printf *)', 'Bash(test *)',
-    'Bash(find *)', 'Bash(grep *)', 'Bash(rg *)', 'Bash(ag *)',
-    'Bash(which *)', 'Bash(whereis *)', 'Bash(type *)',
-    'Bash(file *)', 'Bash(stat *)', 'Bash(diff *)',
-    'Bash(basename *)', 'Bash(dirname *)', 'Bash(realpath *)',
-    // File ops (non-destructive)
-    'Bash(mkdir *)', 'Bash(cp *)', 'Bash(mv *)', 'Bash(touch *)',
-    'Bash(chmod *)', 'Bash(sed *)', 'Bash(awk *)', 'Bash(xargs *)',
-    // Network / tools
-    'Bash(curl *)', 'Bash(wget *)', 'Bash(ping *)',
-    'Bash(ps *)', 'Bash(lsof *)', 'Bash(du *)',
-    'Bash(python *)', 'Bash(python3 *)', 'Bash(gh *)',
-    'Bash(docker *)', 'Bash(bash *)', 'Bash(source *)',
-    'Bash(timeout *)', 'Bash(bc *)',
+    'Bash(git rm*)', 'Bash(git mv*)', 'Bash(git check-ignore*)',
+    'Bash(git config*)', 'Bash(git remote*)', 'Bash(git rev-parse*)',
+    'Bash(git ls-files*)', 'Bash(git blame*)', 'Bash(git shortlog*)',
+    'Bash(git describe*)', 'Bash(git -C *)',
+    // Other
+    'Bash(gh *)', 'Bash(bc *)', 'Bash(python *)', 'Bash(python3 *)',
+    'Bash(bash *)', 'Bash(source *)', 'Bash(timeout *)',
+    'Bash(for *)', 'Bash(du *)', 'Bash(start *)', 'Bash(pandoc *)',
+    // Env vars
     'Bash(export *)', 'Bash(set *)',
+    'Bash(DATABASE_URL=*)', 'Bash(PORT=*)', 'Bash(CI=*)',
+    'Bash(DEBUG=*)', 'Bash(NODE_OPTIONS=*)', 'Bash(TMPDIR=*)',
+    'Bash(E2E_DATABASE_URL=*)',
 ];
 
-// Explicitly NOT in YOLO Safe: rm, git push, git reset --hard, git clean, git restore, kill
+// Explicitly NOT in YOLO Safe: rm, git push, git reset, git clean, git restore
 
 function readSettings() {
     try {
