@@ -23,8 +23,8 @@ function splitLines(text) {
 const COMMANDS = {
     FETCH_NOW: 'claudePal.fetchNow',
     OPEN_SETTINGS: 'claudePal.openSettings',
-SHOW_DEBUG: 'claudePal.showDebug',
-CLEAR_SESSION: 'claudePal.clearSession',
+    SHOW_DEBUG: 'claudePal.showDebug',
+    CLEAR_SESSION: 'claudePal.clearSession',
     OPEN_BROWSER: 'claudePal.openBrowser',
     RESYNC_ACCOUNT: 'claudePal.resyncAccount',
     TOGGLE_SOUND: 'claudePal.toggleSound',
@@ -71,7 +71,7 @@ class FileLogger {
     }
 
     getMaxSizeBytes() {
-        return 256 * 1024; // 256 KB
+        return THRESHOLDS.LOG_MAX_BYTES;
     }
 
     generateInstanceId(workspacePath) {
@@ -162,7 +162,23 @@ function fileLog(message) {
 
 const TIMEOUTS = {
     SESSION_DURATION: 3600000, // 1 hour
+    STARTUP_DELAY: 2000,
+    SERVICE_STATUS_REFRESH: 5 * 60 * 1000, // 5 minutes
+    SERVICE_STATUS_CACHE_TTL: 60000, // 1 minute
+    SERVICE_STATUS_REQUEST: 10000, // 10 seconds
+    SOUND_PLAY: 5000,
 };
+
+const THRESHOLDS = {
+    WARNING_PERCENT: 80,
+    ERROR_PERCENT: 90,
+    LOG_MAX_BYTES: 256 * 1024, // 256 KB
+};
+
+// Read version from package.json at module load time
+const EXTENSION_VERSION = (() => {
+    try { return require('../package.json').version; } catch { return '0.0.0'; }
+})();
 
 const CLAUDE_URLS = {
     BASE: 'https://claude.ai',
@@ -306,7 +322,9 @@ module.exports = {
     PATHS,
     DEFAULT_TOKEN_LIMIT,
     TIMEOUTS,
+    THRESHOLDS,
     CLAUDE_URLS,
+    EXTENSION_VERSION,
     getTokenLimit,
     setDevMode,
     isDebugEnabled,

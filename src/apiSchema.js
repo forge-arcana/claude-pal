@@ -118,24 +118,16 @@ function processOverageData(overageData) {
     };
 }
 
-// API field names vary - try common alternatives
 function processPrepaidData(creditsData) {
     if (!creditsData) return null;
 
-    const balanceCents = creditsData.remaining_credits
-        ?? creditsData.balance
-        ?? creditsData.credit_balance
-        ?? creditsData.available_credits
-        ?? 0;
+    const extracted = extractFromSchema(creditsData, PREPAID_API_SCHEMA);
 
-    if (balanceCents === 0) return null;
-
-    const balanceDollars = balanceCents / 100;
-    const currency = creditsData.currency ?? 'USD';
+    if (extracted.balance === 0) return null;
 
     return {
-        balance: balanceDollars,
-        currency: currency,
+        balance: extracted.balance / 100,
+        currency: extracted.currency,
     };
 }
 

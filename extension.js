@@ -12,20 +12,24 @@ const path = require('path');
 const os = require('os');
 const { ClaudeHttpFetcher } = require('./src/httpFetcher');
 const { createStatusBarItem, updateStatusBar, startSpinner, stopSpinner, refreshServiceStatus } = require('./src/statusBar');
-const { ActivityMonitor } = require('./src/activityMonitor');
+const { getStats: getActivityStats } = require('./src/activityMonitor');
 const { setupNotifier, teardownNotifier, toggleSound, setSoundEnabled, changeSoundPicker } = require('./src/notifier');
-const { CONFIG_NAMESPACE, COMMANDS, setDevMode, isDebugEnabled, getDebugChannel, disposeDebugChannel, initFileLogger, fileLog, formatModelName, capitalizeFirst } = require('./src/utils');
+const { CONFIG_NAMESPACE, COMMANDS, TIMEOUTS, setDevMode, getDebugChannel, disposeDebugChannel, initFileLogger, fileLog, formatModelName, capitalizeFirst } = require('./src/utils');
 const { ClaudeDataLoader } = require('./src/claudeDataLoader');
-const { MODES, getCurrentMode, setMode, getModeDisplay } = require('./src/permissionsManager');
+const { MODES, getCurrentMode, setMode } = require('./src/permissionsManager');
 const { CREDENTIALS_PATH, readCredentials, formatSubscriptionType, formatRateLimitTier } = require('./src/credentialsReader');
 
 let statusBarItem;
-let httpFetcher;
+let httpFetcher = null;
+
+function ensureFetcher() {
+    if (!httpFetcher) httpFetcher = new ClaudeHttpFetcher();
+    return httpFetcher;
+}
 let usageData = null;
 let credentialsInfo = null;
 let autoRefreshTimer;
 let serviceStatusTimer;
-let activityMonitor;
 let credentialsWatcher;
 let currentWorkspacePath = null;
 let claudeDataLoader = null;
@@ -82,10 +86,7 @@ async function performFetch(isManualRetry = false) {
 async function fetchUsage(isManualRetry = false) {
     fileLog(`fetchUsage() called (isManualRetry=${isManualRetry})`);
 
-    if (!httpFetcher) {
-        httpFetcher = new ClaudeHttpFetcher();
-        fileLog('Created new ClaudeHttpFetcher instance');
-    }
+    ensureFetcher();
 
     try {
         fileLog('Calling fetchUsageData()...');
@@ -96,6 +97,7 @@ async function fetchUsage(isManualRetry = false) {
         fileLog(`fetchUsage() error: ${error.message}`);
 
         if (error.message === 'NO_SESSION' || error.message === 'SESSION_EXPIRED' || error.message === 'NO_ORG_ID') {
+            usageData = null; // Clear stale data so status bar shows login prompt
             if (!isManualRetry) {
                 const msg = error.message === 'NO_ORG_ID'
                     ? 'No Claude Code credentials found. Install and run Claude Code first.'
@@ -161,7 +163,7 @@ async function refreshModelInfo() {
 
 async function updateStatusBarWithAllData() {
     await refreshModelInfo();
-    const activityStats = activityMonitor ? activityMonitor.getStats(usageData, null) : null;
+    const activityStats = getActivityStats(usageData, null);
     const permissionMode = getCurrentMode();
     updateStatusBar(statusBarItem, usageData, activityStats, null, credentialsInfo, currentModelInfo, permissionMode);
 }
@@ -263,10 +265,7 @@ async function activate(context) {
         refreshServiceStatus().then(() => updateStatusBarWithAllData()).catch(err => {
             console.log('Claude Pal: Service status refresh failed:', err.message);
         });
-    }, 5 * 60 * 1000);
-
-    activityMonitor = new ActivityMonitor();
-    activityMonitor.startMonitoring(context);
+    }, TIMEOUTS.SERVICE_STATUS_REFRESH);
 
     setupCredentialsMonitoring(context);
 
@@ -331,7 +330,7 @@ async function activate(context) {
     context.subscriptions.push(
         vscode.commands.registerCommand(COMMANDS.CLEAR_SESSION, async () => {
             try {
-                if (!httpFetcher) httpFetcher = new ClaudeHttpFetcher();
+                ensureFetcher();
                 httpFetcher.clearSession();
                 loginWasCancelled = false;
                 fileLog('Session cleared');
@@ -344,7 +343,7 @@ async function activate(context) {
     context.subscriptions.push(
         vscode.commands.registerCommand(COMMANDS.RESYNC_ACCOUNT, async () => {
             try {
-                if (!httpFetcher) httpFetcher = new ClaudeHttpFetcher();
+                ensureFetcher();
                 httpFetcher.clearSession();
                 loginWasCancelled = false;
                 fileLog('Resync Account: session cleared, starting login flow');
@@ -361,7 +360,7 @@ async function activate(context) {
     context.subscriptions.push(
         vscode.commands.registerCommand(COMMANDS.OPEN_BROWSER, async () => {
             try {
-                if (!httpFetcher) httpFetcher = new ClaudeHttpFetcher();
+                ensureFetcher();
                 await httpFetcher.login();
                 await performFetch(true);
             } catch (error) {
@@ -410,16 +409,14 @@ async function activate(context) {
     // Always fetch on startup
     console.log('Claude Pal: Scheduling fetch on startup...');
     setTimeout(async () => {
-        const fetcher = new ClaudeHttpFetcher();
-        if (!fetcher.hasExistingSession()) {
-            httpFetcher = fetcher;
+        ensureFetcher();
+        if (!httpFetcher.hasExistingSession()) {
             fileLog('No session cookie found on startup -- skipping (click status bar to login)');
             return;
         }
 
         console.log('Claude Pal: Starting fetch on startup...');
         try {
-            httpFetcher = fetcher;
             const result = await performFetch();
             if (result.webError) {
                 console.log('Claude Pal: Startup fetch web error:', result.webError.message);
@@ -428,7 +425,7 @@ async function activate(context) {
         } catch (error) {
             console.error('Claude Pal: Fetch on startup failed:', error);
         }
-    }, 2000);
+    }, TIMEOUTS.STARTUP_DELAY);
 
     const config = vscode.workspace.getConfiguration(CONFIG_NAMESPACE);
     const autoRefreshMinutes = config.get('autoRefreshMinutes', 5);

@@ -8,11 +8,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const { fileLog } = require('./utils');
-
-const CLAUDE_DIR = path.join(os.homedir(), '.claude');
-const SETTINGS_FILE = path.join(CLAUDE_DIR, 'settings.json');
+const { CLAUDE_DIR, readSettings, writeSettings } = require('./claudeSettings');
 const BACKUP_FILE = path.join(CLAUDE_DIR, '.claude-pal-permissions-backup.json');
 
 // Three permission modes
@@ -85,19 +82,6 @@ const YOLO_SAFE_PERMISSIONS = [
 ];
 
 // Explicitly NOT in YOLO Safe: rm, git push, git reset, git clean, git restore
-
-function readSettings() {
-    try {
-        return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf-8'));
-    } catch {
-        return {};
-    }
-}
-
-function writeSettings(settings) {
-    fs.mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true });
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2) + '\n');
-}
 
 function backupPermissions(settings) {
     const backup = {

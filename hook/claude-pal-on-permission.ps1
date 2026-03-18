@@ -26,7 +26,7 @@ if (Test-Path $muteFlag) { exit 0 }
 $config = $null
 try { $config = (Get-Content $configFile -Raw) | ConvertFrom-Json } catch {}
 
-$eventCfg = if ($config -and $config.needsPermission) { $config.needsPermission } else { $null }
+$eventCfg = if ($config -and $config.asksQuestion) { $config.asksQuestion } else { $null }
 $level = if ($eventCfg -and $eventCfg.level) { $eventCfg.level } else { 'sound' }
 
 if ($level -eq 'off') { exit 0 }

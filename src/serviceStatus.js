@@ -6,7 +6,7 @@
 // License:   MIT
 // Copyright: (c) 2026 forge
 
-const https = require('https');
+const { TIMEOUTS, EXTENSION_VERSION } = require('./utils');
 
 const STATUS_API_URL = 'https://status.claude.com/api/v2/status.json';
 const STATUS_PAGE_URL = 'https://status.claude.com';
@@ -48,7 +48,7 @@ const STATUS_INDICATORS = {
 
 let cachedStatus = null;
 let lastFetchTime = 0;
-const CACHE_TTL_MS = 60000; // Cache for 1 minute
+const CACHE_TTL_MS = TIMEOUTS.SERVICE_STATUS_CACHE_TTL;
 
 /**
  * Fetch service status from status.claude.com API
@@ -61,54 +61,30 @@ async function fetchServiceStatus() {
         return cachedStatus;
     }
 
-    return new Promise((resolve, reject) => {
-        const request = https.get(STATUS_API_URL, {
-            timeout: 10000,
-            headers: {
-                'Accept': 'application/json',
-                'User-Agent': 'ClaudePal-VSCode/1.0'
-            }
-        }, (response) => {
-            let data = '';
-
-            response.on('data', (chunk) => {
-                data += chunk;
-            });
-
-            response.on('end', () => {
-                try {
-                    if (response.statusCode !== 200) {
-                        throw new Error(`HTTP ${response.statusCode}`);
-                    }
-
-                    const json = JSON.parse(data);
-                    const result = {
-                        indicator: json.status?.indicator || 'unknown',
-                        description: json.status?.description || 'Status unknown',
-                        updatedAt: json.page?.updated_at || null,
-                        pageUrl: STATUS_PAGE_URL
-                    };
-
-                    // Update cache
-                    cachedStatus = result;
-                    lastFetchTime = now;
-
-                    resolve(result);
-                } catch (parseError) {
-                    reject(new Error(`Failed to parse status response: ${parseError.message}`));
-                }
-            });
-        });
-
-        request.on('error', (error) => {
-            reject(new Error(`Failed to fetch service status: ${error.message}`));
-        });
-
-        request.on('timeout', () => {
-            request.destroy();
-            reject(new Error('Service status request timed out'));
-        });
+    const res = await fetch(STATUS_API_URL, {
+        headers: {
+            'Accept': 'application/json',
+            'User-Agent': `ClaudePal-VSCode/${EXTENSION_VERSION}`,
+        },
+        signal: AbortSignal.timeout(TIMEOUTS.SERVICE_STATUS_REQUEST),
     });
+
+    if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+    }
+
+    const json = await res.json();
+    const result = {
+        indicator: json.status?.indicator || 'unknown',
+        description: json.status?.description || 'Status unknown',
+        updatedAt: json.page?.updated_at || null,
+        pageUrl: STATUS_PAGE_URL,
+    };
+
+    cachedStatus = result;
+    lastFetchTime = now;
+
+    return result;
 }
 
 /**
@@ -134,14 +110,6 @@ function formatStatusTime(isoTimestamp) {
     } catch (e) {
         return 'Unknown';
     }
-}
-
-/**
- * Clear the cached status (useful for forcing a refresh)
- */
-function clearStatusCache() {
-    cachedStatus = null;
-    lastFetchTime = 0;
 }
 
 module.exports = {

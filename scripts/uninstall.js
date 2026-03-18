@@ -47,10 +47,9 @@ try {
         if (settings.hooks) {
             for (const [hookType, hooks] of Object.entries(settings.hooks)) {
                 if (Array.isArray(hooks)) {
-                    settings.hooks[hookType] = hooks.filter(h => {
-                        const cmd = typeof h === 'string' ? h : (h.command || '');
-                        return !cmd.includes('claude-pal');
-                    });
+                    settings.hooks[hookType] = hooks.filter(entry =>
+                        !entry.hooks?.some(h => h.command?.includes('claude-pal'))
+                    );
                 }
             }
             fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));

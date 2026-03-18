@@ -343,8 +343,7 @@ class ClaudeHttpFetcher {
             throw new Error('Invalid session cookie — could not authenticate');
         }
 
-        const email = bootstrapData.account.email_address;
-        fileLog(`Login successful: ${email}`);
+        fileLog('Login successful');
 
         const creds = readCredentials();
         this._saveCookie(sessionKey.trim(), null, creds?.orgId);

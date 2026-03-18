@@ -7,7 +7,7 @@
 // Copyright: (c) 2026 forge
 
 const vscode = require('vscode');
-const { COMMANDS, calculateResetClockTime, calculateResetClockTimeExpanded, getCurrencySymbol, formatModelName, capitalizeFirst } = require('./utils');
+const { COMMANDS, THRESHOLDS, calculateResetClockTime, calculateResetClockTimeExpanded, getCurrencySymbol } = require('./utils');
 const { fetchServiceStatus, getStatusDisplay, formatStatusTime, STATUS_PAGE_URL } = require('./serviceStatus');
 const { formatSubscriptionType, formatRateLimitTier } = require('./credentialsReader');
 const { isSoundMuted } = require('./notifier');
@@ -34,8 +34,8 @@ let statusBarItems = {
 // Hardcoded defaults (removed from user settings)
 const STATUS_BAR_ALIGNMENT = vscode.StatusBarAlignment.Right;
 const STATUS_BAR_PRIORITY = 100;
-const WARNING_THRESHOLD = 80;
-const ERROR_THRESHOLD = 90;
+const WARNING_THRESHOLD = THRESHOLDS.WARNING_PERCENT;
+const ERROR_THRESHOLD = THRESHOLDS.ERROR_PERCENT;
 
 function formatPercent(percent) {
     return `${percent}%`;
@@ -91,7 +91,7 @@ function getLabelText(credentialsInfo, modelInfo, permissionMode) {
         text += ' $(shield)';
     }
 
-    if (true && currentServiceStatus && currentServiceStatus.indicator !== 'none') {
+    if (currentServiceStatus && currentServiceStatus.indicator !== 'none') {
         const display = getStatusDisplay(currentServiceStatus.indicator);
         return `${display.icon} ${text}`;
     }
@@ -99,7 +99,7 @@ function getLabelText(credentialsInfo, modelInfo, permissionMode) {
 }
 
 function getServiceStatusColor() {
-    if (true && currentServiceStatus) {
+    if (currentServiceStatus) {
         const display = getStatusDisplay(currentServiceStatus.indicator);
         if (display.color) {
             return new vscode.ThemeColor(display.color);
@@ -114,8 +114,6 @@ function getServiceStatusColor() {
 
 function getServiceStatusTooltipLines() {
     const lines = [];
-    if (!true) return lines;
-
     if (currentServiceStatus) {
         const display = getStatusDisplay(currentServiceStatus.indicator);
         lines.push('');
@@ -136,8 +134,6 @@ function getServiceStatusTooltipLines() {
 }
 
 async function refreshServiceStatus() {
-    if (!true) return null;
-
     try {
         currentServiceStatus = await fetchServiceStatus();
         serviceStatusError = null;
@@ -266,7 +262,7 @@ function createStatusBarItem(context) {
     return statusBarItems.label;
 }
 
-function updateStatusBar(item, usageData, activityStats = null, sessionData = null, credentialsInfo = null, modelInfo = null, permissionMode = null) {
+function updateStatusBar(item, usageData, activityStats = null, _sessionData = null, credentialsInfo = null, modelInfo = null, permissionMode = null) {
     const sessionThresholds = { warning: WARNING_THRESHOLD, error: ERROR_THRESHOLD };
     const weeklyThresholds = { warning: WARNING_THRESHOLD, error: ERROR_THRESHOLD };
 
