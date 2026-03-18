@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.4 — 2026-03-18
+
+- Fix Windows PS1 permission hook reading wrong config key — sound preferences now apply
+- Clear stale usage data on session expiry — status bar shows login prompt instead of old data
+- Extract shared sound-player module (single source of truth for sound maps across all hooks)
+- Extract shared settings module (eliminates race condition from duplicate read/write)
+- Replace manual https.get with native fetch for service status
+- Convert ActivityMonitor to plain functions, centralize magic numbers
+- Remove dead signal watcher, if(true) guards, and unused code
+- Fix uninstall script hook filtering, fix prepaid data fallback chain
+- Dynamic User-Agent version from package.json
+
 ## 1.0.3 — 2026-03-15
 
 - Add missing changelog entries for v1.0.1 and v1.0.2
