@@ -4,7 +4,7 @@ scripts/**
 eslint.config.js
 esbuild.js
 node_modules/**
-*.map
+**/*.map
 .gitignore
 .vscode/**
 memory/**

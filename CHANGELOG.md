@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.5 — 2026-03-20
+
+- Replace tooltip with click-to-open QuickPick menu showing usage data, progress bars, and actions
+- Compact status bar label: `$(robot) Opus 4.6` with mode/service icons
+- Add API fetch timeouts (30s) to prevent hung connections blocking auto-refresh
+- Atomic settings.json writes (write-tmp-then-rename) to prevent corruption
+- Redact PII from debug channel output (org ID, raw API responses)
+- Remove 7+ dead exported functions across all modules
+- Extract quickMenu.js module from extension.js (SRP)
+- Register all timers as VS Code disposables for proper lifecycle cleanup
+- Remove stale PS1 signal file writes
+- Fix .vscodeignore to exclude dev artifacts (memory/, .vscode/) and protect hook/
+- Guard progress bar against NaN/undefined input
+- Derive spinner frame array from character string (DRY)
+
 ## 1.0.4 — 2026-03-18
 
 - Fix Windows PS1 permission hook reading wrong config key — sound preferences now apply
