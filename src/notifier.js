@@ -4,8 +4,6 @@
  *
  * Deploys hook scripts to ~/.claude/hooks/ so Claude Code plays sounds
  * on two events: toolPrompt (PermissionRequest) and taskComplete (Stop).
- *
- * Hooks write a signal file that this module watches to show VS Code messages.
  */
 
 const vscode = require("vscode");
@@ -27,6 +25,7 @@ const MUTE_FLAG = path.join(HOOKS_DIR, "claude-pal-muted");
 const CONFIG_FILE = path.join(HOOKS_DIR, "claude-pal-config.json");
 const HOOK_TYPES = ["Stop", "PermissionRequest"];
 const HOOK_PREFIX = "claude-pal";
+const HOOK_ENTRY_TYPE = "command";
 
 let soundEnabled = true;
 
@@ -145,14 +144,14 @@ function registerHooks() {
   // Stop hook — task completed
   if (!settings.hooks.Stop) settings.hooks.Stop = [];
   settings.hooks.Stop.push({
-    hooks: [{ type: "command", command: hookCmd(STOP_HOOK) }],
+    hooks: [{ type: HOOK_ENTRY_TYPE, command: hookCmd(STOP_HOOK) }],
   });
 
   // PermissionRequest hook — needs permission
   if (!settings.hooks.PermissionRequest)
     settings.hooks.PermissionRequest = [];
   settings.hooks.PermissionRequest.push({
-    hooks: [{ type: "command", command: hookCmd(PERMISSION_HOOK) }],
+    hooks: [{ type: HOOK_ENTRY_TYPE, command: hookCmd(PERMISSION_HOOK) }],
   });
 
   writeSettings(settings);

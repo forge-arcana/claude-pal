@@ -7,17 +7,20 @@
 // Copyright: (c) 2026 forge
 
 const vscode = require('vscode');
-const { COMMANDS, THRESHOLDS, calculateResetClockTime, calculateResetClockTimeExpanded, getCurrencySymbol } = require('./utils');
-const { fetchServiceStatus, getStatusDisplay, formatStatusTime, STATUS_PAGE_URL } = require('./serviceStatus');
-const { formatSubscriptionType, formatRateLimitTier } = require('./credentialsReader');
-const { isSoundMuted } = require('./notifier');
+const { COMMANDS, THRESHOLDS } = require('./utils');
+const { fetchServiceStatus, getStatusDisplay } = require('./serviceStatus');
+const { MODES } = require('./permissionsManager');
+
+// Spinner characters used in status bar text during fetch
+const SPINNER_CHARS = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+const SPINNER_REGEX = new RegExp(` [${SPINNER_CHARS}](\\s*)$`);
+const SPINNER_STRIP_REGEX = new RegExp(` [${SPINNER_CHARS}]$`);
 
 // Service status state
 let currentServiceStatus = null;
-let serviceStatusError = null;
 
 // Spinner state
-const spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const spinnerFrames = [...SPINNER_CHARS];
 let spinnerIndex = 0;
 let spinnerInterval = null;
 let isSpinnerActive = false;
@@ -37,8 +40,10 @@ const STATUS_BAR_PRIORITY = 100;
 const WARNING_THRESHOLD = THRESHOLDS.WARNING_PERCENT;
 const ERROR_THRESHOLD = THRESHOLDS.ERROR_PERCENT;
 
-function formatPercent(percent) {
-    return `${percent}%`;
+const SEVERITY_ORDER = { error: 2, warning: 1, normal: 0 };
+
+function pickWorstStatus(a, b) {
+    return (SEVERITY_ORDER[a.level] || 0) >= (SEVERITY_ORDER[b.level] || 0) ? a : b;
 }
 
 function getIconAndColor(percent, warningThreshold = 80, errorThreshold = 90) {
@@ -73,10 +78,10 @@ function getIconAndColor(percent, warningThreshold = 80, errorThreshold = 90) {
  * @returns {string}
  */
 function getLabelText(credentialsInfo, modelInfo, permissionMode) {
-    let text = 'Claude';
+    let text = '$(robot)';
 
     if (modelInfo && modelInfo.modelDisplay) {
-        text = `Claude - ${modelInfo.modelDisplay}`;
+        text = `$(robot) ${modelInfo.modelDisplay}`;
         if (modelInfo.hasThinking && modelInfo.effortLevel) {
             text += ` - Thinking (${modelInfo.effortLevel})`;
         } else if (modelInfo.hasThinking) {
@@ -85,9 +90,9 @@ function getLabelText(credentialsInfo, modelInfo, permissionMode) {
     }
 
     // YOLO badge
-    if (permissionMode === 'yolo') {
+    if (permissionMode === MODES.YOLO) {
         text += ' $(zap)';
-    } else if (permissionMode === 'yolo-safe') {
+    } else if (permissionMode === MODES.YOLO_SAFE) {
         text += ' $(shield)';
     }
 
@@ -108,35 +113,9 @@ function getServiceStatusColor() {
     return undefined;
 }
 
-// ---------------------------------------------------------------------------
-// Service status
-// ---------------------------------------------------------------------------
-
-function getServiceStatusTooltipLines() {
-    const lines = [];
-    if (currentServiceStatus) {
-        const display = getStatusDisplay(currentServiceStatus.indicator);
-        lines.push('');
-        lines.push(`**Service Status:** ${display.label}`);
-        if (currentServiceStatus.description && currentServiceStatus.description !== display.label) {
-            lines.push(`${currentServiceStatus.description}`);
-        }
-        if (currentServiceStatus.updatedAt) {
-            lines.push(`Last checked: ${formatStatusTime(currentServiceStatus.updatedAt)}`);
-        }
-        lines.push(`[View status page](${STATUS_PAGE_URL})`);
-    } else if (serviceStatusError) {
-        lines.push('');
-        lines.push('**Service Status:** Unable to fetch');
-    }
-
-    return lines;
-}
-
 async function refreshServiceStatus() {
     try {
         currentServiceStatus = await fetchServiceStatus();
-        serviceStatusError = null;
 
         // Update label if initialized and spinner isn't running
         if (statusBarItems.label && !isSpinnerActive) {
@@ -157,14 +136,9 @@ async function refreshServiceStatus() {
 
         return currentServiceStatus;
     } catch (error) {
-        serviceStatusError = error;
         currentServiceStatus = null;
         return null;
     }
-}
-
-function getServiceStatus() {
-    return currentServiceStatus;
 }
 
 // ---------------------------------------------------------------------------
@@ -175,77 +149,6 @@ function setAllTooltips(tooltip) {
     if (statusBarItems.label) {
         statusBarItems.label.tooltip = tooltip;
     }
-}
-
-// ---------------------------------------------------------------------------
-// Tooltip action links (command links rendered in hover panel)
-// ---------------------------------------------------------------------------
-
-function buildHeaderLine(title, credentialsInfo, modelInfo) {
-    const parts = [];
-    if (credentialsInfo) {
-        const plan = formatSubscriptionType(credentialsInfo.subscriptionType);
-        const tier = formatRateLimitTier(credentialsInfo.rateLimitTier);
-        if (plan && tier && tier.startsWith(plan)) {
-            parts.push(tier);
-        } else if (plan && tier && tier !== plan) {
-            parts.push(`${plan} · ${tier}`);
-        } else if (tier) {
-            parts.push(tier);
-        } else if (plan) {
-            parts.push(plan);
-        }
-    }
-    if (modelInfo && modelInfo.modelDisplay) {
-        parts.push(modelInfo.modelDisplay);
-        if (modelInfo.hasThinking && modelInfo.effortLevel) {
-            parts.push(`Thinking (${modelInfo.effortLevel})`);
-        } else if (modelInfo.hasThinking) {
-            parts.push('Thinking');
-        }
-    }
-    if (parts.length > 0) {
-        return `**${title}** — ${parts.join(' · ')}`;
-    }
-    return `**${title}**`;
-}
-
-function buildPermissionLinks(currentMode) {
-    const lines = [];
-    const modes = [
-        { mode: 'yolo', label: '$(zap) YOLO', desc: 'Approve All' },
-        { mode: 'yolo-safe', label: '$(shield) Safe', desc: 'Non-destructive' },
-        { mode: 'normal', label: '$(lock) Normal', desc: 'Ask Permission' },
-    ];
-    const parts = modes.map(m => {
-        if (m.mode === currentMode) return `**${m.label}**`;
-        return `[${m.label}](command:claudePal.setMode.${m.mode})`;
-    });
-    lines.push(`Permissions: ${parts.join(' · ')}`);
-    return lines;
-}
-
-function buildActionLinks(currentMode) {
-    const lines = [];
-    lines.push(...buildPermissionLinks(currentMode));
-    const muted = isSoundMuted();
-    lines.push(`Sound: [$(unmute) On](command:claudePal.soundOn)${!muted ? ' ✓' : ''} · [$(mute) Off](command:claudePal.soundOff)${muted ? ' ✓' : ''} · [$(play) Prompt](command:claudePal.changePromptSound) · [$(play) Done](command:claudePal.changeDoneSound)`);
-    lines.push('[$(gear) Extension Settings](command:workbench.action.openSettings?"claudePal")');
-    lines.push('[$(sync) Refresh Usage](command:claudePal.resyncAccount)');
-    return lines;
-}
-
-function buildTooltipWithActions(currentMode, credentialsInfo = null, modelInfo = null) {
-    const header = buildHeaderLine('Claude Pal', credentialsInfo, modelInfo);
-    const lines = [header];
-
-    lines.push('');
-    lines.push(...buildActionLinks(currentMode));
-
-    const md = new vscode.MarkdownString(lines.join('  \n'));
-    md.isTrusted = true;
-    md.supportThemeIcons = true;
-    return md;
 }
 
 // ---------------------------------------------------------------------------
@@ -262,9 +165,7 @@ function createStatusBarItem(context) {
     return statusBarItems.label;
 }
 
-function updateStatusBar(item, usageData, activityStats = null, _sessionData = null, credentialsInfo = null, modelInfo = null, permissionMode = null) {
-    const sessionThresholds = { warning: WARNING_THRESHOLD, error: ERROR_THRESHOLD };
-    const weeklyThresholds = { warning: WARNING_THRESHOLD, error: ERROR_THRESHOLD };
+function updateStatusBar(item, usageData, credentialsInfo = null, modelInfo = null, permissionMode = null) {
 
     // --- No data yet ---
     if (!usageData) {
@@ -273,131 +174,35 @@ function updateStatusBar(item, usageData, activityStats = null, _sessionData = n
                 statusBarItems.label.text = getLabelText(credentialsInfo, modelInfo, permissionMode);
                 statusBarItems.label.color = getServiceStatusColor();
             }
-            const noDataTooltip = buildTooltipWithActions(permissionMode, credentialsInfo, modelInfo);
-            setAllTooltips(noDataTooltip);
+            setAllTooltips('Click for usage details');
         }
         return;
     }
 
-    // --- Build tooltip ---
-    const tooltipLines = [];
-
-    // Account + plan + model header (single line)
-    const rawAccountName = usageData.accountInfo?.name;
-    const accountName = rawAccountName
-        ? rawAccountName.replace(/'s Organi[sz]ation$/, '')
-        : null;
-    const headerTitle = accountName || 'Claude Pal';
-    tooltipLines.push(buildHeaderLine(headerTitle, credentialsInfo, modelInfo));
-    tooltipLines.push('');
-
-    // Session
-    let sessionPercent = null;
-    let sessionResetTime = null;
+    // --- Usage levels (for status bar color) ---
     let sessionStatus = { icon: '', color: undefined, level: 'normal' };
-
-    if (usageData.usagePercent !== undefined && usageData.usagePercent !== null) {
-        sessionPercent = usageData.usagePercent;
-        sessionResetTime = calculateResetClockTime(usageData.resetTime);
-        const sessionResetTimeExpanded = calculateResetClockTimeExpanded(usageData.resetTime);
-        sessionStatus = getIconAndColor(sessionPercent, sessionThresholds.warning, sessionThresholds.error);
-
-        tooltipLines.push(`**Session ${sessionPercent}%** — Resets ${sessionResetTimeExpanded}`);
-    }
-
-    // Weekly
-    let weeklyPercent = null;
-    let weeklyResetTime = null;
     let weeklyStatus = { icon: '', color: undefined, level: 'normal' };
 
-    if (usageData.usagePercentWeek !== undefined && usageData.usagePercentWeek !== null) {
-        weeklyPercent = usageData.usagePercentWeek;
-        weeklyResetTime = calculateResetClockTime(usageData.resetTimeWeek);
-        const weeklyResetTimeExpanded = calculateResetClockTimeExpanded(usageData.resetTimeWeek);
-        weeklyStatus = getIconAndColor(weeklyPercent, weeklyThresholds.warning, weeklyThresholds.error);
-
-        tooltipLines.push('');
-        tooltipLines.push(`**Weekly ${weeklyPercent}%** — Resets ${weeklyResetTimeExpanded}`);
-
-        // Sonnet/Opus percentages in tooltip only
-        if (usageData.usagePercentSonnet !== null && usageData.usagePercentSonnet !== undefined) {
-            tooltipLines.push(`Sonnet: ${usageData.usagePercentSonnet}%`);
-        }
-        if (usageData.usagePercentOpus !== null && usageData.usagePercentOpus !== undefined) {
-            tooltipLines.push(`Opus: ${usageData.usagePercentOpus}%`);
-        }
+    if (usageData.usagePercent != null) {
+        sessionStatus = getIconAndColor(usageData.usagePercent, WARNING_THRESHOLD, ERROR_THRESHOLD);
+    }
+    if (usageData.usagePercentWeek != null) {
+        weeklyStatus = getIconAndColor(usageData.usagePercentWeek, WARNING_THRESHOLD, ERROR_THRESHOLD);
     }
 
-    // Credits (tooltip only)
-    if (usageData.monthlyCredits) {
-        const credits = usageData.monthlyCredits;
-        const currencySymbol = getCurrencySymbol(credits.currency);
-        const usedFormatted = `${currencySymbol}${credits.used.toLocaleString()}`;
-        const limitFormatted = `${currencySymbol}${credits.limit.toLocaleString()}`;
-
-        tooltipLines.push('');
-        tooltipLines.push('**Extra Usage**');
-        tooltipLines.push(`Used: ${usedFormatted} / ${limitFormatted} ${credits.currency} (${credits.percent}%)`);
-
-        if (usageData.prepaidCredits) {
-            const prepaid = usageData.prepaidCredits;
-            const prepaidSymbol = getCurrencySymbol(prepaid.currency);
-            tooltipLines.push(`Balance: ${prepaidSymbol}${prepaid.balance.toLocaleString()} ${prepaid.currency}`);
-        }
-    } else if (usageData.prepaidCredits) {
-        const prepaid = usageData.prepaidCredits;
-        const prepaidSymbol = getCurrencySymbol(prepaid.currency);
-        tooltipLines.push('');
-        tooltipLines.push('**Credits**');
-        tooltipLines.push(`Balance: ${prepaidSymbol}${prepaid.balance.toLocaleString()} ${prepaid.currency}`);
-    }
-
-    // Activity description
-    if (activityStats && activityStats.description) {
-        tooltipLines.push('');
-        tooltipLines.push(`*${activityStats.description.quirky}*`);
-    }
-
-    // Service status
-    tooltipLines.push(...getServiceStatusTooltipLines());
-
-    // Actions
-    tooltipLines.push('');
-    tooltipLines.push(...buildActionLinks(permissionMode));
-
-    // Footer
-    tooltipLines.push('');
-    if (usageData.timestamp) {
-        tooltipLines.push(`Updated: ${usageData.timestamp.toLocaleTimeString()}`);
-    }
-
-    const markdown = new vscode.MarkdownString(tooltipLines.join('  \n'));
-    markdown.isTrusted = true;
-    markdown.supportThemeIcons = true;
+    // Simple tooltip — detail is in the click menu
     if (!isSpinnerActive) {
-        setAllTooltips(markdown);
+        setAllTooltips('Click for usage details');
     }
 
     // --- Render unified status bar text ---
+    // Usage numbers are in the click menu; status bar shows label + warning color only
     if (!isSpinnerActive && statusBarItems.label) {
-        const parts = [getLabelText(credentialsInfo, modelInfo, permissionMode)];
+        statusBarItems.label.text = getLabelText(credentialsInfo, modelInfo, permissionMode);
 
-        if (sessionPercent !== null) {
-            parts.push(`${formatPercent(sessionPercent)} ${sessionResetTime}`);
-        }
-        if (weeklyPercent !== null) {
-            parts.push(`${formatPercent(weeklyPercent)} ${weeklyResetTime}`);
-        }
-
-        statusBarItems.label.text = parts.join(' | ');
-
-        // Use the worst color (error > warning > normal)
-        const worstStatus = sessionStatus.level === 'error' || weeklyStatus.level === 'error'
-            ? sessionStatus.level === 'error' ? sessionStatus : weeklyStatus
-            : sessionStatus.level === 'warning' || weeklyStatus.level === 'warning'
-                ? sessionStatus.level === 'warning' ? sessionStatus : weeklyStatus
-                : { color: getServiceStatusColor() };
-        statusBarItems.label.color = worstStatus.color || getServiceStatusColor();
+        // Color reflects worst usage state (error > warning > normal)
+        const worst = pickWorstStatus(sessionStatus, weeklyStatus);
+        statusBarItems.label.color = worst.color || getServiceStatusColor();
     }
 }
 
@@ -415,66 +220,49 @@ function startSpinner() {
 
     if (statusBarItems.label) {
         spinnerInterval = setInterval(() => {
-            const currentBase = statusBarItems.label.text.replace(/ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](\s*)$/, '').trim();
+            const currentBase = statusBarItems.label.text.replace(SPINNER_REGEX, '').trim();
             statusBarItems.label.text = `${currentBase} ${spinnerFrames[spinnerIndex]}`;
             spinnerIndex = (spinnerIndex + 1) % spinnerFrames.length;
         }, 80);
     }
 }
 
-function stopSpinner(webError = null, tokenError = null) {
+function stripSpinner(text) {
+    return text.replace(SPINNER_STRIP_REGEX, '').trim();
+}
+
+function buildErrorTooltip(lines) {
+    const md = new vscode.MarkdownString(lines.join('  \n'));
+    md.isTrusted = true;
+    md.supportThemeIcons = true;
+    return md;
+}
+
+function stopSpinner(webError = null) {
     if (spinnerInterval) {
         clearInterval(spinnerInterval);
         spinnerInterval = null;
     }
     isSpinnerActive = false;
 
-    if (webError && tokenError) {
-        const errorLines = [
-            '**Complete Fetch Failed**',
-            '',
-            `Web: ${webError.message}`,
-            `Tokens: ${tokenError.message}`,
-            '',
-            '**Debug Info**',
-            `Time: ${new Date().toLocaleString()}`,
-            '',
-            '**Actions**',
-            '• Click to retry',
-            '• Run "Claude Pal: Show Debug Output" for details',
-            '[$(output) Debug](command:claudePal.showDebug) · [$(trash) Clear Session](command:claudePal.clearSession)'
-        ];
-        const md1 = new vscode.MarkdownString(errorLines.join('  \n'));
-        md1.isTrusted = true;
-        md1.supportThemeIcons = true;
-        setAllTooltips(md1);
-
-        if (statusBarItems.label) {
-            statusBarItems.label.text = `${statusBarItems.label.text.replace(/ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]$/, '').trim()} ✗`;
-            statusBarItems.label.color = new vscode.ThemeColor('errorForeground');
-        }
-    } else if (webError) {
-        const errorLines = [
-            '**Web Fetch Failed**',
+    if (webError) {
+        setAllTooltips(buildErrorTooltip([
+            '**Fetch Failed**',
             '',
             `Error: ${webError.message}`,
             '',
             '[$(sync) Retry](command:claudePal.fetchNow)' +
             ' · [$(output) Debug](command:claudePal.showDebug)' +
             ' · [$(trash) Clear Session](command:claudePal.clearSession)'
-        ];
-        const md2 = new vscode.MarkdownString(errorLines.join('  \n'));
-        md2.isTrusted = true;
-        md2.supportThemeIcons = true;
-        setAllTooltips(md2);
+        ]));
 
         if (statusBarItems.label) {
-            statusBarItems.label.text = `${statusBarItems.label.text.replace(/ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]$/, '').trim()} ⚠`;
+            statusBarItems.label.text = `${stripSpinner(statusBarItems.label.text)} ⚠`;
             statusBarItems.label.color = new vscode.ThemeColor('editorWarning.foreground');
         }
     } else {
         if (statusBarItems.label) {
-            statusBarItems.label.text = `${statusBarItems.label.text.replace(/ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]$/, '').trim()}  `;
+            statusBarItems.label.text = `${stripSpinner(statusBarItems.label.text)}  `;
             statusBarItems.label.color = getServiceStatusColor();
         }
     }
@@ -490,5 +278,4 @@ module.exports = {
     startSpinner,
     stopSpinner,
     refreshServiceStatus,
-    getServiceStatus
 };

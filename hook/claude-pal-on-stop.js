@@ -13,7 +13,7 @@ process.stdin.setEncoding("utf-8");
 process.stdin.on("data", (chunk) => (raw += chunk));
 process.stdin.on("end", () => {
   let input = {};
-  try { input = JSON.parse(raw); } catch { process.exit(0); }
+  try { input = JSON.parse(raw); } catch { process.stderr.write("claude-pal: failed to parse stdin\n"); process.exit(0); }
 
   if (input.stop_hook_active) process.exit(0);
   if (fs.existsSync(MUTE_FLAG)) process.exit(0);
@@ -53,11 +53,6 @@ process.stdin.on("end", () => {
   const sound = resolveSound(soundName);
 
   if (sound) playSound(sound);
-
-  // Write signal for VSCode extension
-  try {
-    fs.writeFileSync(path.join(HOOKS_DIR, "claude-pal-signal"), reason + " " + Date.now());
-  } catch {}
 
   process.exit(0);
 });

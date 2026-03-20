@@ -166,17 +166,8 @@ function setMode(mode) {
     writeSettings(settings);
 }
 
-function getModeDisplay(mode) {
-    switch (mode) {
-        case MODES.YOLO: return { label: 'YOLO', icon: '$(zap)' };
-        case MODES.YOLO_SAFE: return { label: 'Safe', icon: '$(shield)' };
-        default: return { label: null, icon: null };
-    }
-}
-
 module.exports = {
     MODES,
     getCurrentMode,
     setMode,
-    getModeDisplay,
 };

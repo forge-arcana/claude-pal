@@ -96,25 +96,8 @@ function getStatusDisplay(indicator) {
     return STATUS_INDICATORS[indicator] || STATUS_INDICATORS.unknown;
 }
 
-/**
- * Format the updated_at timestamp for display
- * @param {string} isoTimestamp - ISO 8601 timestamp
- * @returns {string} Formatted time string
- */
-function formatStatusTime(isoTimestamp) {
-    if (!isoTimestamp) return 'Unknown';
-
-    try {
-        const date = new Date(isoTimestamp);
-        return date.toLocaleString();
-    } catch (e) {
-        return 'Unknown';
-    }
-}
-
 module.exports = {
     fetchServiceStatus,
     getStatusDisplay,
-    formatStatusTime,
     STATUS_PAGE_URL,
 };

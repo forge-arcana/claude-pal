@@ -6,4 +6,6 @@ esbuild.js
 node_modules/**
 *.map
 .gitignore
+.vscode/**
+memory/**
 assets/claude-pal-icon.png

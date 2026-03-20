@@ -9,6 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { capitalizeFirst } = require('./utils');
 
 const CREDENTIALS_PATH = path.join(os.homedir(), '.claude', '.credentials.json');
 
@@ -35,9 +36,7 @@ function readCredentials() {
 }
 
 function formatSubscriptionType(type) {
-    if (!type) return null;
-    // "max" → "Max", "pro" → "Pro", "free" → "Free"
-    return type.charAt(0).toUpperCase() + type.slice(1).toLowerCase();
+    return capitalizeFirst(type);
 }
 
 function formatRateLimitTier(tier) {
@@ -46,7 +45,7 @@ function formatRateLimitTier(tier) {
     // "default_claude_pro" → "Pro"
     const match = tier.match(/default_claude_(\w+?)(?:_(\d+x))?$/);
     if (match) {
-        const plan = match[1].charAt(0).toUpperCase() + match[1].slice(1);
+        const plan = capitalizeFirst(match[1]);
         return match[2] ? `${plan} ${match[2]}` : plan;
     }
     return tier;

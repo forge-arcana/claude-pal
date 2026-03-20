@@ -64,6 +64,7 @@ class FileLogger {
         this.instanceId = this.generateInstanceId(workspacePath);
         this.logFile = this.getLogFilePath();
         this.maxSizeBytes = this.getMaxSizeBytes();
+        this.lastTrimCheck = 0;
     }
 
     getLogFilePath() {
@@ -85,6 +86,11 @@ class FileLogger {
     }
 
     trimIfNeeded() {
+        // Throttle: check at most once per 60 seconds
+        const now = Date.now();
+        if (now - this.lastTrimCheck < 60000) return;
+        this.lastTrimCheck = now;
+
         try {
             if (!fs.existsSync(this.logFile)) return;
 
@@ -166,6 +172,7 @@ const TIMEOUTS = {
     SERVICE_STATUS_REFRESH: 5 * 60 * 1000, // 5 minutes
     SERVICE_STATUS_CACHE_TTL: 60000, // 1 minute
     SERVICE_STATUS_REQUEST: 10000, // 10 seconds
+    API_REQUEST: 30000, // 30 seconds
     SOUND_PLAY: 5000,
 };
 
@@ -237,57 +244,6 @@ function calculateResetClockTime(resetTime) {
     }
 }
 
-// Full datetime format for tooltips (uses system locale)
-function calculateResetClockTimeExpanded(resetTime) {
-    try {
-        const days = resetTime.match(/(\d+)d/);
-        const hours = resetTime.match(/(\d+)h/);
-        const minutes = resetTime.match(/(\d+)m/);
-
-        let totalMinutes = 0;
-        if (days) totalMinutes += parseInt(days[1]) * 24 * 60;
-        if (hours) totalMinutes += parseInt(hours[1]) * 60;
-        if (minutes) totalMinutes += parseInt(minutes[1]);
-
-        const now = new Date();
-        const resetDate = new Date(now.getTime() + totalMinutes * 60 * 1000);
-
-        return resetDate.toLocaleString(undefined, {
-            weekday: 'long',
-            day: 'numeric',
-            month: 'long',
-            hour: 'numeric',
-            minute: '2-digit'
-        });
-    } catch (error) {
-        return 'Unknown';
-    }
-}
-
-function getCurrencySymbol(currency) {
-    const symbols = {
-        USD: '$',
-        AUD: '$',
-        CAD: '$',
-        EUR: '€',
-        GBP: '£',
-        JPY: '¥',
-        CNY: '¥',
-        KRW: '₩',
-        INR: '₹',
-        BRL: 'R$',
-        MXN: '$',
-        CHF: 'CHF ',
-        SEK: 'kr',
-        NOK: 'kr',
-        DKK: 'kr',
-        NZD: '$',
-        SGD: '$',
-        HKD: '$',
-    };
-    return symbols[currency] || '';
-}
-
 // Format model ID to display name
 // "claude-opus-4-6-20250901" → "Opus 4.6"
 // "claude-sonnet-4-5-20250514" → "Sonnet 4.5"
@@ -316,7 +272,33 @@ function capitalizeFirst(str) {
     return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
 }
 
+/**
+ * Convert ISO timestamp to human-readable countdown (e.g. "2h 15m", "5d 21h").
+ * Pure utility — no fetcher/class dependency needed.
+ */
+function calculateResetTimeFromISO(isoTimestamp) {
+    if (!isoTimestamp) return 'Unknown';
+    try {
+        const diffMs = new Date(isoTimestamp) - new Date();
+        if (diffMs <= 0) return 'Soon';
+
+        const hours = Math.floor(diffMs / (1000 * 60 * 60));
+        const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+
+        if (hours > 24) {
+            const days = Math.floor(hours / 24);
+            return `${days}d ${hours % 24}h`;
+        } else if (hours > 0) {
+            return `${hours}h ${minutes}m`;
+        }
+        return `${minutes}m`;
+    } catch {
+        return 'Unknown';
+    }
+}
+
 module.exports = {
+    calculateResetTimeFromISO,
     CONFIG_NAMESPACE,
     COMMANDS,
     PATHS,
@@ -331,8 +313,6 @@ module.exports = {
     getDebugChannel,
     disposeDebugChannel,
     calculateResetClockTime,
-    calculateResetClockTimeExpanded,
-    getCurrencySymbol,
     formatModelName,
     capitalizeFirst,
     initFileLogger,

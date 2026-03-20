@@ -11,6 +11,19 @@ const path = require('path');
 const os = require('os');
 const { getTokenLimit, TIMEOUTS, splitLines } = require('./utils');
 
+function emptySessionUsage(extra = {}) {
+    return {
+        totalTokens: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        messageCount: 0,
+        isActive: false,
+        ...extra,
+    };
+}
+
 class ClaudeDataLoader {
     constructor(workspacePath = null, debugLogger = null) {
         this.claudeConfigPaths = this.getClaudeConfigPaths();
@@ -32,13 +45,6 @@ class ClaudeDataLoader {
             .replace(/\\/g, '-')  // Windows backslashes
             .replace(/\//g, '-')  // Unix forward slashes
             .replace(/:/g, '');   // Remove colons from Windows drive letters
-    }
-
-    setWorkspacePath(workspacePath) {
-        this.workspacePath = workspacePath;
-        this.projectDirName = workspacePath ? this.convertPathToClaudeDir(workspacePath) : null;
-        this.log(`ClaudeDataLoader workspace set to: ${workspacePath}`);
-        this.log(`   Project dir name: ${this.projectDirName}`);
     }
 
     async getProjectDataDirectory() {
@@ -117,7 +123,7 @@ class ClaudeDataLoader {
         return null;
     }
 
-    async findJsonlFiles(dirPath) {
+    async findJsonlFiles(dirPath, maxDepth = 3, currentDepth = 0) {
         const jsonlFiles = [];
 
         try {
@@ -126,8 +132,8 @@ class ClaudeDataLoader {
             for (const entry of entries) {
                 const fullPath = path.join(dirPath, entry.name);
 
-                if (entry.isDirectory()) {
-                    const subFiles = await this.findJsonlFiles(fullPath);
+                if (entry.isDirectory() && currentDepth < maxDepth) {
+                    const subFiles = await this.findJsonlFiles(fullPath, maxDepth, currentDepth + 1);
                     jsonlFiles.push(...subFiles);
                 } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
                     jsonlFiles.push(fullPath);
@@ -160,15 +166,7 @@ class ClaudeDataLoader {
             if (!dataDir) {
                 this.log(`Project directory not found for: ${this.projectDirName}`);
                 this.log('   Not falling back to global search to avoid cross-project data');
-                return {
-                    totalTokens: 0,
-                    inputTokens: 0,
-                    outputTokens: 0,
-                    cacheCreationTokens: 0,
-                    cacheReadTokens: 0,
-                    messageCount: 0,
-                    isActive: false
-                };
+                return emptySessionUsage();
             }
         } else {
             this.log('   No projectDirName set, using global search');
@@ -177,15 +175,7 @@ class ClaudeDataLoader {
 
         if (!dataDir) {
             this.log('Claude data directory not found');
-            return {
-                totalTokens: 0,
-                inputTokens: 0,
-                outputTokens: 0,
-                cacheCreationTokens: 0,
-                cacheReadTokens: 0,
-                messageCount: 0,
-                isActive: false
-            };
+            return emptySessionUsage();
         }
 
         try {
@@ -225,16 +215,7 @@ class ClaudeDataLoader {
 
             if (recentFiles.length === 0) {
                 this.log('No recently modified files - conversation may be inactive');
-                return {
-                    totalTokens: 0,
-                    inputTokens: 0,
-                    outputTokens: 0,
-                    cacheCreationTokens: 0,
-                    cacheReadTokens: 0,
-                    messageCount: 0,
-                    isActive: false,
-                    activeSessionCount: 0
-                };
+                return emptySessionUsage({ activeSessionCount: 0 });
             }
 
             // Scan ALL recent session files and track the highest cache_read value
@@ -303,16 +284,7 @@ class ClaudeDataLoader {
 
         } catch (error) {
             console.error(`Error getting current session usage: ${error.message}`);
-            return {
-                totalTokens: 0,
-                inputTokens: 0,
-                outputTokens: 0,
-                cacheCreationTokens: 0,
-                cacheReadTokens: 0,
-                messageCount: 0,
-                isActive: false,
-                activeSessionCount: 0
-            };
+            return emptySessionUsage({ activeSessionCount: 0 });
         }
     }
 

@@ -11,6 +11,7 @@ const FILES_TO_CLEAN = [
     'claude-pal-on-stop.ps1',
     'claude-pal-on-permission.js',
     'claude-pal-on-permission.ps1',
+    'claude-pal-sounds.js',
     'claude-pal-on-question.js',
     'claude-pal-on-question.ps1',
     'claude-pal-config.json',

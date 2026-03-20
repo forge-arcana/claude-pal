@@ -41,8 +41,3 @@ if ($level -ne 'off') {
         else { [console]::Beep(800, 300) }
     } catch {}
 }
-
-# Write signal for VSCode extension
-try {
-    Set-Content -Path (Join-Path $hooksDir 'claude-pal-signal') -Value "input $(Get-Date -UFormat %s)" -NoNewline
-} catch {}

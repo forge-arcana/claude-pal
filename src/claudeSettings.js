@@ -22,8 +22,11 @@ function readSettings() {
 }
 
 function writeSettings(settings) {
-    fs.mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true });
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2) + '\n');
+    const dir = path.dirname(SETTINGS_FILE);
+    fs.mkdirSync(dir, { recursive: true });
+    const tmpFile = path.join(dir, `.settings.${process.pid}.tmp`);
+    fs.writeFileSync(tmpFile, JSON.stringify(settings, null, 2) + '\n');
+    fs.renameSync(tmpFile, SETTINGS_FILE);
 }
 
 module.exports = {

@@ -133,6 +133,7 @@ function processPrepaidData(creditsData) {
 
 function getSchemaInfo() {
     return {
+        version: '1.0',
         usageFields: Object.keys(USAGE_API_SCHEMA),
         overageFields: Object.keys(OVERAGE_API_SCHEMA),
         endpoints: Object.keys(API_ENDPOINTS),

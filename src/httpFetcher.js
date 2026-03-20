@@ -5,8 +5,6 @@
 
 const path = require('path');
 const fs = require('fs');
-const vscode = require('vscode');
-
 const {
     USAGE_API_SCHEMA,
     extractFromSchema,
@@ -18,12 +16,23 @@ const {
 const {
     PATHS,
     CLAUDE_URLS,
+    TIMEOUTS,
     isDebugEnabled,
     getDebugChannel,
     fileLog,
+    calculateResetTimeFromISO,
 } = require('./utils');
 
 const { readCredentials } = require('./credentialsReader');
+
+// Typed errors for control flow (not string comparison)
+class SessionError extends Error {
+    constructor(code) {
+        super(code);
+        this.code = code;
+        this.name = 'SessionError';
+    }
+}
 
 // Browser-like headers to pass Cloudflare challenge
 const BROWSER_HEADERS = {
@@ -45,6 +54,7 @@ const BROWSER_HEADERS = {
 class ClaudeHttpFetcher {
     constructor() {
         this.accountInfo = null;
+        this._cachedOrgId = null;
     }
 
     // --- Cookie Management ---
@@ -56,6 +66,11 @@ class ClaudeHttpFetcher {
             }
             const data = JSON.parse(fs.readFileSync(PATHS.SESSION_COOKIE_FILE, 'utf-8'));
             if (!data.sessionKey) return null;
+            // Reject cookies with CRLF chars (header injection prevention)
+            if (/[\r\n]/.test(data.sessionKey)) {
+                fileLog('Session cookie contains invalid characters');
+                return null;
+            }
             return data;
         } catch (error) {
             fileLog(`Error reading session cookie: ${error.message}`);
@@ -66,7 +81,7 @@ class ClaudeHttpFetcher {
     _saveCookie(sessionKey, expires, orgId) {
         const dir = path.dirname(PATHS.SESSION_COOKIE_FILE);
         if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
+            fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
         }
         const data = {
             sessionKey,
@@ -74,7 +89,7 @@ class ClaudeHttpFetcher {
             savedAt: new Date().toISOString(),
             orgId: orgId || null,
         };
-        fs.writeFileSync(PATHS.SESSION_COOKIE_FILE, JSON.stringify(data, null, 2));
+        fs.writeFileSync(PATHS.SESSION_COOKIE_FILE, JSON.stringify(data, null, 2), { mode: 0o600 });
         fileLog('Session cookie saved');
     }
 
@@ -113,35 +128,15 @@ class ClaudeHttpFetcher {
                 ...BROWSER_HEADERS,
                 'Cookie': `sessionKey=${sessionKey}`,
             },
+            signal: AbortSignal.timeout(TIMEOUTS.API_REQUEST),
         });
         if (!response.ok) return null;
         return response.json();
     }
 
-    // Fetch bootstrap using the CLI OAuth access token as a Bearer token.
-    // Returns the account email if successful, null if the token doesn't work.
-    async _fetchBootstrapWithCliToken() {
-        const creds = readCredentials();
-        if (!creds?.accessToken) return null;
-        try {
-            const response = await fetch(`${CLAUDE_URLS.BASE}/api/bootstrap`, {
-                method: 'GET',
-                headers: {
-                    ...BROWSER_HEADERS,
-                    'Authorization': `Bearer ${creds.accessToken}`,
-                },
-            });
-            if (!response.ok) return null;
-            const data = await response.json();
-            return data?.account?.email_address || null;
-        } catch {
-            return null;
-        }
-    }
-
     async _fetchEndpoint(url) {
         const cookie = this._readCookie();
-        if (!cookie) throw new Error('NO_SESSION');
+        if (!cookie) throw new SessionError('NO_SESSION');
 
         const response = await fetch(url, {
             method: 'GET',
@@ -149,13 +144,14 @@ class ClaudeHttpFetcher {
                 ...BROWSER_HEADERS,
                 'Cookie': `sessionKey=${cookie.sessionKey}`,
             },
+            signal: AbortSignal.timeout(TIMEOUTS.API_REQUEST),
         });
 
         if (response.status === 401 || response.status === 403) {
             // Check if it's a Cloudflare challenge vs actual auth failure
             const text = await response.text();
             if (text.includes('permission_error') || text.includes('account_session_invalid') || text.includes('"type":"error"')) {
-                throw new Error('SESSION_EXPIRED');
+                throw new SessionError('SESSION_EXPIRED');
             }
             // Cloudflare challenge or other issue
             throw new Error(`API_ERROR_${response.status}`);
@@ -177,7 +173,7 @@ class ClaudeHttpFetcher {
         const data = await this._fetchEndpoint(`${CLAUDE_URLS.BASE}/api/bootstrap`);
         const memberships = data?.account?.memberships;
         if (!memberships || memberships.length === 0) {
-            throw new Error('NO_ORG_ID');
+            throw new SessionError('NO_ORG_ID');
         }
 
         // Use first org (personal account). If there are multiple,
@@ -202,12 +198,12 @@ class ClaudeHttpFetcher {
 
         const cookie = this._readCookie();
         if (!cookie || !cookie.sessionKey) {
-            throw new Error('NO_SESSION');
+            throw new SessionError('NO_SESSION');
         }
 
         // Check cookie expiry
         if (cookie.expires && cookie.expires <= Date.now() / 1000) {
-            throw new Error('SESSION_EXPIRED');
+            throw new SessionError('SESSION_EXPIRED');
         }
 
         const orgId = await this._resolveOrgId();
@@ -218,7 +214,7 @@ class ClaudeHttpFetcher {
 
         if (debug) {
             debugChannel.appendLine(`\n=== HTTP FETCH (${new Date().toLocaleString()}) ===`);
-            debugChannel.appendLine(`Org ID: ${orgId}`);
+            debugChannel.appendLine(`Org ID: ${orgId.slice(0, 8)}...`);
             debugChannel.appendLine(`Account: ${this.accountInfo?.name || 'unknown'}`);
             debugChannel.appendLine(`Fetching: ${usageUrl}`);
         }
@@ -246,42 +242,13 @@ class ClaudeHttpFetcher {
 
         if (debug) {
             debugChannel.appendLine('Usage fetch SUCCESS');
-            debugChannel.appendLine(JSON.stringify(usageData, null, 2));
-            if (creditsData) debugChannel.appendLine(`Credits: ${JSON.stringify(creditsData)}`);
-            if (overageData) debugChannel.appendLine(`Overage: ${JSON.stringify(overageData)}`);
+            debugChannel.appendLine(`Has credits data: ${!!creditsData}`);
+            debugChannel.appendLine(`Has overage data: ${!!overageData}`);
         }
 
         fileLog('Usage data fetched successfully');
 
         return this._processApiResponse(usageData, creditsData, overageData);
-    }
-
-    _calculateResetTime(isoTimestamp) {
-        if (!isoTimestamp) return 'Unknown';
-
-        try {
-            const resetDate = new Date(isoTimestamp);
-            const now = new Date();
-            const diffMs = resetDate - now;
-
-            if (diffMs <= 0) return 'Soon';
-
-            const hours = Math.floor(diffMs / (1000 * 60 * 60));
-            const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-
-            if (hours > 24) {
-                const days = Math.floor(hours / 24);
-                const remainingHours = hours % 24;
-                return `${days}d ${remainingHours}h`;
-            } else if (hours > 0) {
-                return `${hours}h ${minutes}m`;
-            } else {
-                return `${minutes}m`;
-            }
-        } catch (error) {
-            console.error('Error calculating reset time:', error);
-            return 'Unknown';
-        }
     }
 
     _processApiResponse(apiResponse, creditsData = null, overageData = null) {
@@ -292,20 +259,18 @@ class ClaudeHttpFetcher {
 
             return {
                 usagePercent: data.fiveHour.utilization,
-                resetTime: this._calculateResetTime(data.fiveHour.resetsAt),
+                resetTime: calculateResetTimeFromISO(data.fiveHour.resetsAt),
                 usagePercentWeek: data.sevenDay.utilization,
-                resetTimeWeek: this._calculateResetTime(data.sevenDay.resetsAt),
+                resetTimeWeek: calculateResetTimeFromISO(data.sevenDay.resetsAt),
                 usagePercentSonnet: data.sevenDaySonnet.utilization,
-                resetTimeSonnet: this._calculateResetTime(data.sevenDaySonnet.resetsAt),
+                resetTimeSonnet: calculateResetTimeFromISO(data.sevenDaySonnet.resetsAt),
                 usagePercentOpus: data.sevenDayOpus.utilization,
-                resetTimeOpus: this._calculateResetTime(data.sevenDayOpus.resetsAt),
+                resetTimeOpus: calculateResetTimeFromISO(data.sevenDayOpus.resetsAt),
                 extraUsage: data.extraUsage.value,
                 prepaidCredits: prepaidCredits,
                 monthlyCredits: monthlyCredits,
                 accountInfo: this.accountInfo,
                 timestamp: new Date(),
-                rawData: apiResponse,
-                schemaVersion: getSchemaInfo().version,
             };
         } catch (error) {
             console.error('Error processing API response:', error);
@@ -313,27 +278,21 @@ class ClaudeHttpFetcher {
         }
     }
 
-    // --- Login Flow (browser cookie paste) ---
+    // --- Login Flow ---
 
-    async login() {
+    /**
+     * Authenticate with a session key obtained externally.
+     * The caller (extension.js) handles UI — this class stays UI-free.
+     * @param {() => Promise<string|null>} getSessionKey - callback that returns a session key or null if cancelled
+     */
+    async login(getSessionKey) {
         fileLog('Login flow started');
 
-        // Open claude.ai in the user's default browser
-        const loginUrl = vscode.Uri.parse(CLAUDE_URLS.LOGIN);
-        await vscode.env.openExternal(loginUrl);
-
-        // Ask user to paste their sessionKey cookie
-        const sessionKey = await vscode.window.showInputBox({
-            title: 'Claude Pal — Paste Session Cookie',
-            prompt: 'Log in to claude.ai, then copy your sessionKey cookie from DevTools (F12 → Application → Cookies → claude.ai → sessionKey)',
-            placeHolder: 'sk-ant-...',
-            ignoreFocusOut: true,
-            password: true,
-        });
+        const sessionKey = await getSessionKey();
 
         if (!sessionKey) {
             fileLog('Login cancelled by user');
-            throw new Error('LOGIN_CANCELLED');
+            throw new SessionError('LOGIN_CANCELLED');
         }
 
         // Validate the cookie by fetching bootstrap
@@ -356,22 +315,28 @@ class ClaudeHttpFetcher {
         const creds = readCredentials();
         const schemaInfo = getSchemaInfo();
 
+        const redactId = id => id ? `${id.slice(0, 8)}...` : null;
+        const redactEmail = email => {
+            if (!email) return null;
+            const [user, domain] = email.split('@');
+            return `${user[0]}***@${domain}`;
+        };
+
         return {
             hasCookie: !!cookie,
             cookieExpires: cookie?.expires ? new Date(cookie.expires * 1000).toISOString() : null,
             cookieSavedAt: cookie?.savedAt || null,
-            orgId: creds?.orgId || cookie?.orgId || null,
+            orgId: redactId(creds?.orgId || cookie?.orgId),
             subscriptionType: creds?.subscriptionType || null,
             rateLimitTier: creds?.rateLimitTier || null,
             accountName: this.accountInfo?.name || null,
-            accountEmail: this.accountInfo?.email || null,
+            accountEmail: redactEmail(this.accountInfo?.email),
             schemaVersion: schemaInfo.version,
-            schemaFields: schemaInfo.usageFields,
-            schemaEndpoints: schemaInfo.endpoints,
         };
     }
 }
 
 module.exports = {
     ClaudeHttpFetcher,
+    SessionError,
 };

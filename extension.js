@@ -9,18 +9,31 @@
 const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
-const { ClaudeHttpFetcher } = require('./src/httpFetcher');
+const { ClaudeHttpFetcher, SessionError } = require('./src/httpFetcher');
 const { createStatusBarItem, updateStatusBar, startSpinner, stopSpinner, refreshServiceStatus } = require('./src/statusBar');
-const { getStats: getActivityStats } = require('./src/activityMonitor');
 const { setupNotifier, teardownNotifier, toggleSound, setSoundEnabled, changeSoundPicker } = require('./src/notifier');
 const { CONFIG_NAMESPACE, COMMANDS, TIMEOUTS, setDevMode, getDebugChannel, disposeDebugChannel, initFileLogger, fileLog, formatModelName, capitalizeFirst } = require('./src/utils');
 const { ClaudeDataLoader } = require('./src/claudeDataLoader');
 const { MODES, getCurrentMode, setMode } = require('./src/permissionsManager');
+const { showQuickMenu } = require('./src/quickMenu');
 const { CREDENTIALS_PATH, readCredentials, formatSubscriptionType, formatRateLimitTier } = require('./src/credentialsReader');
+const { readSettings } = require('./src/claudeSettings');
 
 let statusBarItem;
 let httpFetcher = null;
+
+/** Prompt user for session key — UI lives here, not in the fetcher (DIP). */
+async function promptForSessionKey() {
+    const { CLAUDE_URLS } = require('./src/utils');
+    await vscode.env.openExternal(vscode.Uri.parse(CLAUDE_URLS.LOGIN));
+    return vscode.window.showInputBox({
+        title: 'Claude Pal — Paste Session Cookie',
+        prompt: 'Log in to claude.ai, then copy your sessionKey cookie from DevTools (F12 → Application → Cookies → claude.ai → sessionKey)',
+        placeHolder: 'sk-ant-...',
+        ignoreFocusOut: true,
+        password: true,
+    });
+}
 
 function ensureFetcher() {
     if (!httpFetcher) httpFetcher = new ClaudeHttpFetcher();
@@ -30,6 +43,7 @@ let usageData = null;
 let credentialsInfo = null;
 let autoRefreshTimer;
 let serviceStatusTimer;
+let startupTimer;
 let credentialsWatcher;
 let currentWorkspacePath = null;
 let claudeDataLoader = null;
@@ -75,7 +89,7 @@ async function performFetch(isManualRetry = false) {
         webError = webError || error;
         console.error('Failed to fetch usage:', error);
     } finally {
-        stopSpinner(webError, null);
+        stopSpinner(webError);
         await updateStatusBarWithAllData();
     }
 
@@ -96,10 +110,10 @@ async function fetchUsage(isManualRetry = false) {
     } catch (error) {
         fileLog(`fetchUsage() error: ${error.message}`);
 
-        if (error.message === 'NO_SESSION' || error.message === 'SESSION_EXPIRED' || error.message === 'NO_ORG_ID') {
+        if (error instanceof SessionError) {
             usageData = null; // Clear stale data so status bar shows login prompt
             if (!isManualRetry) {
-                const msg = error.message === 'NO_ORG_ID'
+                const msg = error.code === 'NO_ORG_ID'
                     ? 'No Claude Code credentials found. Install and run Claude Code first.'
                     : 'No session. Click status bar to login.';
                 return { webError: new Error(msg), loginCancelled: false };
@@ -108,21 +122,21 @@ async function fetchUsage(isManualRetry = false) {
             // Manual retry: trigger login flow
             try {
                 fileLog('Triggering login flow...');
-                await httpFetcher.login();
+                await httpFetcher.login(promptForSessionKey);
                 fileLog('Login completed, retrying fetch...');
                 usageData = await httpFetcher.fetchUsageData();
                 fileLog('Post-login fetch successful');
                 return { webError: null, loginCancelled: false };
             } catch (loginError) {
                 fileLog(`Login/fetch error: ${loginError.message}`);
-                if (loginError.message === 'LOGIN_CANCELLED') {
+                if (loginError instanceof SessionError && loginError.code === 'LOGIN_CANCELLED') {
                     return { webError: new Error('Login cancelled. Click status bar to retry.'), loginCancelled: true };
                 }
                 return { webError: loginError, loginCancelled: false };
             }
         }
 
-        if (error.message === 'LOGIN_IN_PROGRESS') {
+        if (error instanceof SessionError && error.code === 'LOGIN_IN_PROGRESS') {
             console.log('Claude Pal: Another instance is logging in, skipping this fetch');
             return { webError: null, loginCancelled: false };
         }
@@ -132,16 +146,9 @@ async function fetchUsage(isManualRetry = false) {
     }
 }
 
-// Read effortLevel from ~/.claude/settings.json
 function readEffortLevel() {
-    try {
-        const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
-        if (fs.existsSync(settingsPath)) {
-            const data = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-            return data.effortLevel ? capitalizeFirst(data.effortLevel) : null;
-        }
-    } catch { /* ignore */ }
-    return null;
+    const settings = readSettings();
+    return settings.effortLevel ? capitalizeFirst(settings.effortLevel) : null;
 }
 
 async function refreshModelInfo() {
@@ -163,15 +170,12 @@ async function refreshModelInfo() {
 
 async function updateStatusBarWithAllData() {
     await refreshModelInfo();
-    const activityStats = getActivityStats(usageData, null);
     const permissionMode = getCurrentMode();
-    updateStatusBar(statusBarItem, usageData, activityStats, null, credentialsInfo, currentModelInfo, permissionMode);
+    updateStatusBar(statusBarItem, usageData, credentialsInfo, currentModelInfo, permissionMode);
 }
 
 function createAutoRefreshTimer(minutes) {
     const clampedMinutes = Math.max(1, Math.min(60, minutes));
-
-    if (clampedMinutes <= 0) return null;
 
     console.log(`Web auto-refresh enabled: fetching Claude.ai usage every ${clampedMinutes} minutes`);
 
@@ -266,13 +270,14 @@ async function activate(context) {
             console.log('Claude Pal: Service status refresh failed:', err.message);
         });
     }, TIMEOUTS.SERVICE_STATUS_REFRESH);
+    context.subscriptions.push({ dispose: () => { if (serviceStatusTimer) { clearInterval(serviceStatusTimer); serviceStatusTimer = null; } } });
 
     setupCredentialsMonitoring(context);
 
     // Register commands
     context.subscriptions.push(
         vscode.commands.registerCommand(COMMANDS.SHOW_MENU, async () => {
-            await updateStatusBarWithAllData();
+            await showQuickMenu(usageData, updateStatusBarWithAllData);
         })
     );
 
@@ -361,7 +366,7 @@ async function activate(context) {
         vscode.commands.registerCommand(COMMANDS.OPEN_BROWSER, async () => {
             try {
                 ensureFetcher();
-                await httpFetcher.login();
+                await httpFetcher.login(promptForSessionKey);
                 await performFetch(true);
             } catch (error) {
                 fileLog(`Open browser failed: ${error.message}`);
@@ -408,7 +413,7 @@ async function activate(context) {
 
     // Always fetch on startup
     console.log('Claude Pal: Scheduling fetch on startup...');
-    setTimeout(async () => {
+    startupTimer = setTimeout(async () => {
         ensureFetcher();
         if (!httpFetcher.hasExistingSession()) {
             fileLog('No session cookie found on startup -- skipping (click status bar to login)');
@@ -452,6 +457,11 @@ async function activate(context) {
 }
 
 async function deactivate() {
+    if (startupTimer) {
+        clearTimeout(startupTimer);
+        startupTimer = null;
+    }
+
     if (autoRefreshTimer) {
         clearInterval(autoRefreshTimer);
         autoRefreshTimer = null;
@@ -460,6 +470,11 @@ async function deactivate() {
     if (serviceStatusTimer) {
         clearInterval(serviceStatusTimer);
         serviceStatusTimer = null;
+    }
+
+    if (credentialsWatcher) {
+        credentialsWatcher.dispose();
+        credentialsWatcher = null;
     }
 
     teardownNotifier();
