@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.0 — 2026-03-21
+
+- Replace global Sound On/Off toggle with per-event "No sound" option in each sound picker
+- Sound picker stays open on click: instant preview+select with checkmark update, Back/Close navigation
+- Non-blocking sound preview using async exec (no UI freezes)
+- 2x volume boost on macOS (afplay -v 2) and Linux (paplay --volume=131072)
+- Main click menu stays open after sub-actions with descriptions on all items
+- Remove Open Claude Settings, Re-login, Show Debug Log from click menu
+- Remove toggleSound command and related dead code
+
 ## 1.0.5 — 2026-03-20
 
 - Replace tooltip with click-to-open QuickPick menu showing usage data, progress bars, and actions
