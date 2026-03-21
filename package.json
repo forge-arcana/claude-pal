@@ -100,10 +100,6 @@
         "category": "Claude Pal"
       },
       {
-        "command": "claudePal.toggleSound",
-        "title": "Claude Pal: Toggle Sound Notifications"
-      },
-      {
         "command": "claudePal.changePromptSound",
         "title": "Claude Pal: Change Prompt Sound"
       },

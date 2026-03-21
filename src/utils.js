@@ -27,7 +27,6 @@ const COMMANDS = {
     CLEAR_SESSION: 'claudePal.clearSession',
     OPEN_BROWSER: 'claudePal.openBrowser',
     RESYNC_ACCOUNT: 'claudePal.resyncAccount',
-    TOGGLE_SOUND: 'claudePal.toggleSound',
     SHOW_MENU: 'claudePal.showMenu',
 };
 

@@ -3,7 +3,6 @@
 $ErrorActionPreference = 'SilentlyContinue'
 
 $hooksDir = Join-Path ($env:USERPROFILE) '.claude' 'hooks'
-$muteFlag = Join-Path $hooksDir 'claude-pal-muted'
 $configFile = Join-Path $hooksDir 'claude-pal-config.json'
 
 $winSounds = @{
@@ -21,7 +20,6 @@ $raw = [Console]::In.ReadToEnd()
 try { $data = $raw | ConvertFrom-Json } catch { exit 0 }
 
 if ($data.stop_hook_active) { exit 0 }
-if (Test-Path $muteFlag) { exit 0 }
 
 $reason = 'done'
 
@@ -61,9 +59,7 @@ $soundName = if ($eventCfg -and $eventCfg.sound) { $eventCfg.sound } else { '' }
 $soundPath = if ($winSounds.ContainsKey($soundName)) { $winSounds[$soundName] } else { $defaultSounds[$reason] }
 
 # Play sound
-if ($level -ne 'off') {
-    try {
-        if (Test-Path $soundPath) { (New-Object Media.SoundPlayer $soundPath).PlaySync() }
-        else { [console]::Beep(800, 300) }
-    } catch {}
-}
+try {
+    if (Test-Path $soundPath) { (New-Object Media.SoundPlayer $soundPath).PlaySync() }
+    else { [console]::Beep(800, 300) }
+} catch {}

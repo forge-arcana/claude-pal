@@ -3,7 +3,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { execSync } = require("child_process");
+const { execSync, exec } = require("child_process");
 
 const IS_WIN = process.platform === "win32";
 const IS_WSL = !IS_WIN && process.platform === "linux" && (() => {
@@ -74,6 +74,13 @@ function readConfig() {
   } catch { return null; }
 }
 
+// Volume boost: 2x on macOS/Linux, max system volume on Windows
+// macOS: afplay -v (multiplier, >1.0 amplifies)
+// Linux: paplay --volume (65536=100%, 131072=200%)
+// Windows: SoundPlayer has no volume control — plays at system volume
+const VOLUME_BOOST = 2;
+const PAPLAY_VOLUME = Math.round(65536 * VOLUME_BOOST);
+
 function playSound(soundPath) {
   if (!soundPath) return;
   const pk = getPlatformKey();
@@ -82,17 +89,36 @@ function playSound(soundPath) {
       const ps = `$s='${soundPath}'; if(Test-Path $s){(New-Object Media.SoundPlayer $s).PlaySync()}else{[console]::Beep(800,300)}`;
       execSync(`${PS_BIN} -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(ps, "utf16le").toString("base64")}`, { stdio: "ignore", timeout: 5000 });
     } else if (pk === "mac") {
-      execSync(`afplay "${soundPath}"`, { stdio: "ignore", timeout: 5000 });
+      execSync(`afplay -v ${VOLUME_BOOST} "${soundPath}"`, { stdio: "ignore", timeout: 5000 });
     } else {
-      try { execSync(`paplay "${soundPath}"`, { stdio: "ignore", timeout: 5000 }); }
+      try { execSync(`paplay --volume=${PAPLAY_VOLUME} "${soundPath}"`, { stdio: "ignore", timeout: 5000 }); }
       catch { try { execSync(`aplay "${soundPath}"`, { stdio: "ignore", timeout: 5000 }); }
       catch { process.stdout.write("\x07"); } }
     }
   } catch {}
 }
 
+function playSoundAsync(soundPath) {
+  if (!soundPath) return;
+  const pk = getPlatformKey();
+  try {
+    if (pk === "win") {
+      const ps = `$s='${soundPath}'; if(Test-Path $s){(New-Object Media.SoundPlayer $s).PlaySync()}else{[console]::Beep(800,300)}`;
+      exec(`${PS_BIN} -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(ps, "utf16le").toString("base64")}`, { stdio: "ignore", timeout: 5000 });
+    } else if (pk === "mac") {
+      exec(`afplay -v ${VOLUME_BOOST} "${soundPath}"`, { stdio: "ignore", timeout: 5000 });
+    } else {
+      exec(`paplay --volume=${PAPLAY_VOLUME} "${soundPath}"`, { stdio: "ignore", timeout: 5000 });
+    }
+  } catch {}
+}
+
 function playSoundByName(name) {
   playSound(resolveSound(name));
+}
+
+function playSoundByNameAsync(name) {
+  playSoundAsync(resolveSound(name));
 }
 
 module.exports = {
@@ -105,4 +131,5 @@ module.exports = {
   readConfig,
   playSound,
   playSoundByName,
+  playSoundByNameAsync,
 };

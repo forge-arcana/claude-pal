@@ -10,6 +10,7 @@ const vscode = require("vscode");
 const fs = require("fs");
 const path = require("path");
 
+
 const { CLAUDE_DIR, readSettings, writeSettings } = require("./claudeSettings");
 const HOOKS_DIR = path.join(CLAUDE_DIR, "hooks");
 const IS_WIN = process.platform === "win32";
@@ -17,17 +18,14 @@ const HOOK_EXT = IS_WIN ? ".ps1" : ".js";
 
 // Sound maps loaded from shared module (single source of truth)
 const soundModule = require("../hook/claude-pal-sounds");
-const { getSoundMap, playSoundByName } = soundModule;
+const { getSoundMap, playSoundByName, playSoundByNameAsync } = soundModule;
 
 const STOP_HOOK = path.join(HOOKS_DIR, `claude-pal-on-stop${HOOK_EXT}`);
 const PERMISSION_HOOK = path.join(HOOKS_DIR, `claude-pal-on-permission${HOOK_EXT}`);
-const MUTE_FLAG = path.join(HOOKS_DIR, "claude-pal-muted");
 const CONFIG_FILE = path.join(HOOKS_DIR, "claude-pal-config.json");
 const HOOK_TYPES = ["Stop", "PermissionRequest"];
 const HOOK_PREFIX = "claude-pal";
 const HOOK_ENTRY_TYPE = "command";
-
-let soundEnabled = true;
 
 /**
  * Build the shell command to run a hook script.
@@ -165,7 +163,6 @@ function unregisterHooks() {
   for (const file of [
     STOP_HOOK,
     PERMISSION_HOOK,
-    MUTE_FLAG,
   ]) {
     try {
       fs.unlinkSync(file);
@@ -203,7 +200,7 @@ function unregisterHooks() {
 // ── Public API ─────────────────────────────────────────────────────
 
 /**
- * Set up the notifier: deploy hooks, sync config, start signal watcher.
+ * Set up the notifier: deploy hooks, sync config.
  * @param {vscode.ExtensionContext} context
  */
 function setupNotifier(context) {
@@ -211,7 +208,18 @@ function setupNotifier(context) {
   registerHooks();
   syncConfig();
 
-  soundEnabled = !fs.existsSync(MUTE_FLAG);
+  // Migrate legacy global mute flag to per-event config
+  const legacyMuteFlag = path.join(HOOKS_DIR, "claude-pal-muted");
+  if (fs.existsSync(legacyMuteFlag)) {
+    const config = readHookConfig();
+    const d = getDefaultSounds();
+    config.asksQuestion = { sound: config.asksQuestion?.sound || d.prompt, level: 'off' };
+    config.taskCompleted = { sound: config.taskCompleted?.sound || d.done, level: 'off' };
+    try {
+      fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n");
+      fs.unlinkSync(legacyMuteFlag);
+    } catch {}
+  }
 }
 
 /**
@@ -222,36 +230,6 @@ function teardownNotifier() {
 }
 
 /**
- * @returns {boolean} Whether sound is currently muted.
- */
-function isSoundMuted() {
-  return !soundEnabled;
-}
-
-/**
- * Toggle the mute state. Creates or removes the mute flag file.
- */
-function toggleSound() {
-  soundEnabled = !soundEnabled;
-  if (soundEnabled) {
-    try {
-      fs.unlinkSync(MUTE_FLAG);
-    } catch {}
-  } else {
-    fs.writeFileSync(MUTE_FLAG, "");
-  }
-  console.log(`Claude Pal sound: ${soundEnabled ? "ON" : "OFF"}`);
-}
-
-/**
- * Explicitly set sound on or off.
- */
-function setSoundEnabled(enabled) {
-  if (enabled === soundEnabled) return;
-  toggleSound();
-}
-
-/**
  * Get the list of sound names available on this platform.
  */
 function getAvailableSounds() {
@@ -259,10 +237,17 @@ function getAvailableSounds() {
 }
 
 /**
- * Play a single sound by name using the platform's player.
+ * Play a single sound by name (blocking).
  */
 function playSound(name) {
   playSoundByName(name);
+}
+
+/**
+ * Play a single sound by name (non-blocking, for UI contexts).
+ */
+function playSoundNonBlocking(name) {
+  playSoundByNameAsync(name);
 }
 
 /**
@@ -277,55 +262,113 @@ function readHookConfig() {
 }
 
 /**
- * Show a QuickPick to change a sound, with preview on select.
+ * Get display label for an event's current sound setting.
  * @param {"prompt"|"done"} eventType
- * @param {function} onUpdate - callback after sound is changed
+ * @returns {string} Sound name or "Off"
  */
-async function changeSoundPicker(eventType, onUpdate) {
-  const sounds = getAvailableSounds();
+function getEventSoundLabel(eventType) {
   const config = readHookConfig();
   const configKey = eventType === "prompt" ? "asksQuestion" : "taskCompleted";
   const d = getDefaultSounds();
-  const currentSound = config[configKey]?.sound || (eventType === "prompt" ? d.prompt : d.done);
+  const eventCfg = config[configKey] ?? {};
+  if (eventCfg.level === "off") return "Off";
+  return eventCfg.sound || (eventType === "prompt" ? d.prompt : d.done);
+}
 
-  const items = sounds.map(s => ({
-    label: s === currentSound ? `${s} ✓` : s,
-    sound: s,
-  }));
+/**
+ * Show a QuickPick to change a sound, with preview on select.
+ * Includes "No sound" option to disable per-event sounds.
+ * @param {"prompt"|"done"} eventType
+ * @param {function} onUpdate - callback after sound is changed
+ * @param {function} [onBack] - callback when picker closes (for menu navigation)
+ */
+function changeSoundPicker(eventType, onUpdate, onBack) {
+  const sounds = getAvailableSounds();
+  let config = readHookConfig();
+  const configKey = eventType === "prompt" ? "asksQuestion" : "taskCompleted";
+  const d = getDefaultSounds();
+  let selectedSound = config[configKey]?.sound || (eventType === "prompt" ? d.prompt : d.done);
+  let selectedLevel = config[configKey]?.level ?? "sound";
+
+  function buildItems() {
+    const isOff = selectedLevel === "off";
+    const items = [];
+    items.push({
+      label: isOff ? "$(check) No sound" : "     No sound",
+      sound: "__none__",
+    });
+    items.push({ label: "", kind: vscode.QuickPickItemKind.Separator, sound: null });
+    for (const s of sounds) {
+      items.push({
+        label: !isOff && s === selectedSound ? `$(check) ${s}` : `     ${s}`,
+        sound: s,
+      });
+    }
+    items.push({ label: "", kind: vscode.QuickPickItemKind.Separator, sound: null });
+    items.push({ label: "$(arrow-left) Back", sound: "__back__" });
+    items.push({ label: "$(close) Close", sound: "__close__" });
+    return items;
+  }
 
   const picker = vscode.window.createQuickPick();
   picker.title = eventType === "prompt" ? "Prompt Sound" : "Done Sound";
-  picker.placeholder = `Current: ${currentSound}. Select to preview, Enter to save.`;
-  picker.items = items;
-
-  // Preview sound on highlight
-  picker.onDidChangeActive((items) => {
-    if (items.length > 0) {
-      playSound(items[0].sound);
-    }
-  });
+  picker.placeholder = "Click to preview & select. Back when done.";
+  picker.items = buildItems();
 
   picker.onDidAccept(() => {
     const selected = picker.selectedItems[0];
-    if (selected) {
-      config[configKey] = { sound: selected.sound };
-      try {
-        fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n");
-      } catch {}
-      if (onUpdate) onUpdate();
+    if (!selected) return;
+
+    // Navigation items close the picker
+    if (selected.sound === "__close__") {
+      picker.dispose();
+      return;
     }
-    picker.dispose();
+    if (selected.sound === "__back__") {
+      picker.dispose();
+      if (onBack) onBack();
+      return;
+    }
+
+    // Sound selection: preview, save, update checkmark — stay open
+    if (selected.sound === "__none__") {
+      selectedLevel = "off";
+    } else {
+      selectedSound = selected.sound;
+      selectedLevel = "sound";
+      playSoundNonBlocking(selected.sound);
+    }
+
+    // Save to config
+    config = readHookConfig();
+    if (selectedLevel === "off") {
+      config[configKey] = { ...config[configKey], level: "off" };
+    } else {
+      config[configKey] = { ...config[configKey], sound: selectedSound, level: "sound" };
+    }
+    try {
+      fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n");
+    } catch {}
+    if (onUpdate) onUpdate();
+
+    // Rebuild items to move checkmark, restore active position
+    const clickedSound = selected.sound;
+    const newItems = buildItems();
+    picker.items = newItems;
+    const activeItem = newItems.find(i => i.sound === clickedSound);
+    if (activeItem) picker.activeItems = [activeItem];
   });
 
-  picker.onDidHide(() => picker.dispose());
+  picker.onDidHide(() => {
+    picker.dispose();
+    if (onBack) onBack();
+  });
   picker.show();
 }
 
 module.exports = {
   setupNotifier,
   teardownNotifier,
-  isSoundMuted,
-  setSoundEnabled,
-  toggleSound,
   changeSoundPicker,
+  getEventSoundLabel,
 };

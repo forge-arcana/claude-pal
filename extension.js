@@ -11,7 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const { ClaudeHttpFetcher, SessionError } = require('./src/httpFetcher');
 const { createStatusBarItem, updateStatusBar, startSpinner, stopSpinner, refreshServiceStatus } = require('./src/statusBar');
-const { setupNotifier, teardownNotifier, toggleSound, setSoundEnabled, changeSoundPicker } = require('./src/notifier');
+const { setupNotifier, teardownNotifier, changeSoundPicker } = require('./src/notifier');
 const { CONFIG_NAMESPACE, COMMANDS, TIMEOUTS, setDevMode, getDebugChannel, disposeDebugChannel, initFileLogger, fileLog, formatModelName, capitalizeFirst } = require('./src/utils');
 const { ClaudeDataLoader } = require('./src/claudeDataLoader');
 const { MODES, getCurrentMode, setMode } = require('./src/permissionsManager');
@@ -374,21 +374,6 @@ async function activate(context) {
         })
     );
 
-    context.subscriptions.push(
-        vscode.commands.registerCommand(COMMANDS.TOGGLE_SOUND, () => toggleSound())
-    );
-    context.subscriptions.push(
-        vscode.commands.registerCommand('claudePal.soundOn', () => {
-            setSoundEnabled(true);
-            updateStatusBarWithAllData();
-        })
-    );
-    context.subscriptions.push(
-        vscode.commands.registerCommand('claudePal.soundOff', () => {
-            setSoundEnabled(false);
-            updateStatusBarWithAllData();
-        })
-    );
     context.subscriptions.push(
         vscode.commands.registerCommand('claudePal.changePromptSound', () => {
             changeSoundPicker('prompt', updateStatusBarWithAllData);

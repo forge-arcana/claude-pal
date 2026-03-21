@@ -5,7 +5,6 @@ const fs = require("fs");
 const path = require("path");
 
 const HOOKS_DIR = path.join(process.env.HOME || process.env.USERPROFILE || "~", ".claude", "hooks");
-const MUTE_FLAG = path.join(HOOKS_DIR, "claude-pal-muted");
 const { resolveSound, getDefaultSound, readConfig, playSound } = require(path.join(HOOKS_DIR, "claude-pal-sounds"));
 
 let raw = "";
@@ -16,7 +15,6 @@ process.stdin.on("end", () => {
   try { input = JSON.parse(raw); } catch { process.stderr.write("claude-pal: failed to parse stdin\n"); process.exit(0); }
 
   if (input.stop_hook_active) process.exit(0);
-  if (fs.existsSync(MUTE_FLAG)) process.exit(0);
 
   let reason = "done";
   const transcript = input.transcript_path || "";
